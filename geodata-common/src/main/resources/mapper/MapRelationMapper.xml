@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.whulri.geodata.basecore.mapper.MapRelationMapper">
+
+    <select id="selectMapRelationByMapId" resultType="map">
+        select a.id             as id,
+               b.layerattrtable as layerattrtable,
+               b.isshow         as isshow,
+               c.mapenname      as mapenname
+        from sdms_map_releation a
+                 join sdms_layer b on a.dataconfigid = b.id
+                 join sdms_map c on a.mapid = c.id
+        where a.mapid = #{mapId}
+    </select>
+
+    <select id="selectMapRelationAndDataStyle" resultType="map">
+        select a.id        as id,
+               b.stylename as stylename
+        from sdms_map_releation a
+                 join sdms_datastyle b on a.datastyleid = b.id
+    </select>
+</mapper>

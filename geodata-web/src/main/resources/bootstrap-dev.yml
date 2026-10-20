@@ -1,0 +1,234 @@
+spring:
+  servlet:
+    multipart:
+      max-file-size: 2GB
+      max-request-size: 2GB
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # Redis 密码：无密码鉴权留空即可；若服务端开启 requirepass，必须填真实密码，否则启动后首条命令报 NOAUTH Authentication required
+      password:
+      database: 5
+      timeout: 10s
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+          max-wait: -1ms
+
+  datasource:
+    dynamic:
+      primary: master
+      strict: false
+      datasource:
+        master:
+          driver-class-name: org.postgresql.Driver
+          # 空间数据管理库（PostGIS），按实际环境修改
+          url: jdbc:postgresql://223.75.173.128:25501/geodata_manage?useUnicode=true&characterEncoding=utf8&zeroDateTimeBehavior=convertToNull&useSSL=true&serverTimezone=GMT%2B8
+          username: postgres
+          password: f6Tf!T7BBSmP
+      druid:
+        initial-size: 5
+        min-idle: 5
+        max-active: 20
+        max-wait: 60000
+        validation-query: SELECT 1
+        test-while-idle: true
+        stat-view-servlet:
+          enabled: true
+          url-pattern: /druid/*
+          login-username: whulri
+          login-password: 123456
+
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: admin
+    password: admin123
+    virtual-host: /
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 1
+
+springdoc:
+  enabled: true
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+knife4j:
+  enable: true
+  production: false
+  basic:
+    enable: false
+
+minio:
+  url: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket: geodata
+
+# ===== 空间数据管理业务配置（迁移自 Nacos app-settings.*）=====
+app-settings:
+  # GeoServer 服务
+  # GeoServer 主机（纯 host，代码按 "http://" + ip + ":" + port 拼接；勿填完整 URL）
+  geoServerIP: localhost
+  geoServerPort: 8081
+  geoServerUser: admin
+  geoServerPwd: geoserver
+  geoWorkspace: sdms
+  geoDatastore: sdms_pg
+  geoDb: geodata_manage
+  geoServerPublishType: 2
+  geoServerDataPath: /geoserver_data
+  epsg: "EPSG:4326"
+  isAutoCache: "true"
+  gridSetName: EPSG:4326
+  GISTolerance: "0.0001"
+  MapMaskField: ""
+  tiffRemoveBackGroundColor: "0"
+  zoomStart: 1
+  zoomStop: 20
+  # 发布地址（外部访问 GeoServer 服务基地址）
+  publishAddress: http://localhost:8081/geoserver
+  # 空间参考（默认坐标系）
+  spatialReference: EPSG:4326
+  # 上传/下载/缩略图路径（相对工作目录或绝对路径）
+  uploadFilePath: ./UploadFile
+  downloadFile: ./Download
+  thumbnailPath: ./Thumbnail
+  coordPath: ./Data
+  languagePackFilePath: ./Data/Translate.xml
+  language: zh_CN
+  dataResourceIp: ""
+  bigDataIp: ""
+  database: geodata_manage
+  # PostGIS 动态空间表连接（shp2pgsql 入库用）
+  PostGisHost: 223.75.173.128
+  PostGisPort: "25501"
+  PostGisDB: geodata_manage
+  PostGisUser: postgres
+  PostGisPwd: f6Tf!T7BBSmP
+  # PostgreSQL 客户端工具目录（psql / shp2pgsql 可执行文件所在目录）
+  psqlBinDir: D:/tools/pgsql-15/bin
+  shp2pgsqlBinDir: D:/tools/pgsql-15/bin
+
+# ===== SignalR 实时消息服务（.NET IM 服务，源码 Lri.IMCore；HTTP 端口 8082）=====
+imservice:
+  imIP: 127.0.0.1
+  imPort: 8082
+  isEnableSSL: false
+
+# ===== 三维数据管理（模型/点云/倾斜摄影）=====
+geodata:
+  model3d:
+    storage:
+      endpoint: http://localhost:9000
+      access-key: minioadmin
+      secret-key: minioadmin
+      bucket: geodata
+      # 公开只读：3D Tiles 子瓦片走相对路径，预签名无法覆盖，必须开放前缀匿名只读（推荐 true）
+      public-read: true
+      # 仅开放三维成果前缀的匿名 GET（最小权限），不含 ListBucket/写权限
+      public-read-prefix: model3d/
+      # 对外可达基地址（浏览器用）；留空回退 endpoint。生产一般填 nginx 反代对外地址
+      public-base-url: ""
+      # public-read=false 时的预签名有效期（分钟，仅单文件成果可用）
+      presign-expiry-minutes: 120
+  convert:
+    # 转换临时工作区（解压/产物），必须指向大容量磁盘；倾斜摄影场景建议挂独立数据卷（勿用容器内 tmpfs）
+    work-root: ${java.io.tmpdir}/geodata-convert
+    # 同实例最大并发转换数（CPU/IO 密集，建议 1~2）
+    max-concurrent: 1
+    # 本实例标识：服务重启后据此回收本实例残留任务；留空取主机名。
+    # 同机部署多副本时必须显式指定不同 instance-id，否则重启恢复会互相误杀
+    instance-id: ""
+    # 转换心跳刷新间隔（毫秒）
+    heartbeat-interval-ms: 30000
+    # 僵尸转换判定阈值（分钟）：心跳超过此值未刷新即回收为失败
+    stale-minutes: 15
+    # 看门狗巡检间隔（毫秒）
+    watchdog-interval-ms: 60000
+    # 三维转换 MQ：被 Model3dMqConfig / Model3dServiceImpl / 队列处理器以 @Value 读取，命名空间 geodata.convert.mq
+    mq:
+      exchange: Model3dConvertExchange
+      queue: Model3dConvertQueue
+      routing: model3d.convert
+      # 死信交换机/队列：主队列声明 DLX 兜底；处理器失败时手动转投并携带失败原因
+      dlx: Model3dConvertDlxExchange
+      dlq: Model3dConvertDeadQueue
+      dlq-routing: model3d.convert.dead
+    tools:
+      # —— C++ 工具链：OSGB 倾斜摄影 → 3D Tiles（fanvanzh/3dtiles，Windows/Linux 双平台二进制）——
+      3dtiles:
+        enabled: true
+        win-bin-path: D:/tools/model3d-tools/3dtiles/3dtile.exe
+        linux-bin-path: /opt/tools/model3d-tools/3dtiles/3dtile
+        command-template: "{bin} -f osgb -i {input} -o {output} {extra}"
+        extra-args: ""
+        output-charset: UTF-8
+        timeout-minutes: 240
+      # —— Python 工具链：点云 LAS/LAZ → pnts（venv 内 pip install py3dtiles laszip；bin 指 console_scripts 入口）——
+      # 注意：py3dtiles 12.x 无 __main__.py，不能用 python -m py3dtiles，必须调 py3dtiles 可执行入口
+      py3dtiles:
+        enabled: true
+        win-bin-path: D:/tools/model3d-tools/venv-py3dtiles/Scripts/py3dtiles.exe
+        linux-bin-path: /opt/model3d-venv/bin/py3dtiles
+        # {srs-args}：上传登记了 srs 时展开为 --srs-in <srs>，未填则省略。
+        # 必须指定：缺省时 py3dtiles 把坐标原样写入 transform（经纬度度数而非 ECEF），Cesium 无法定位
+        command-template: "{bin} convert {input} --out {output} --overwrite {srs-args}"
+        output-charset: UTF-8
+        timeout-minutes: 240
+      # —— Node 工具链：OBJ → glb（npm i -g obj2gltf；bin 指向 npx）——
+      # 注意：ProcessBuilder 不经 shell，Windows 上必须写全 npx.cmd 绝对路径（否则 CreateProcess 报错 2）
+      obj2gltf:
+        enabled: true
+        win-bin-path: C:/Program Files/nodejs/npx.cmd
+        linux-bin-path: npx
+        command-template: "{bin} --yes obj2gltf -i {input} -o {output}"
+        output-charset: UTF-8
+        timeout-minutes: 60
+      # —— Node/原生 工具链：FBX → glb（Facebook FBX2glTF 二进制）——
+      fbx2gltf:
+        enabled: true
+        win-bin-path: D:/tools/model3d-tools/FBX2glTF/FBX2glTF-windows-x64.exe
+        linux-bin-path: /opt/tools/model3d-tools/FBX2glTF/FBX2glTF-linux-x64
+        command-template: "{bin} -i {input} -o {output}"
+        output-charset: UTF-8
+        timeout-minutes: 60
+      # —— BIM：IFC → glTF（IfcOpenShell IfcConvert 二进制）——
+      ifcconvert:
+        enabled: true
+        win-bin-path: D:/tools/model3d-tools/IfcConvert/IfcConvert.exe
+        linux-bin-path: /opt/tools/model3d-tools/IfcConvert/IfcConvert
+        # 本机 Windows 应用控制策略拦截 ifcopenshell_geometry_kernel_opencascade.dll（加载即 STATUS_DLL_NOT_FOUND），
+        # 显式指定 --kernel manifold 绕开 OCCT 内核插件（实测出 glb 正常；Linux 无此问题可去掉）
+        command-template: "{bin} --kernel manifold {input} {output}"
+        # 实测 0.9.0 Windows 版 stdout 为 UTF-16LE（Linux 版为 UTF-8，如部署后乱码按实际调整）
+        output-charset: UTF-16LE
+        timeout-minutes: 120
+
+logging:
+  level:
+    com.whulri.geodata.basecore.mapper: debug
+    com.whulri.geodata: info
+    org.springframework.amqp: warn
+
+# ===== Actuator 观测（健康检查明细 + SignalR 实时通道状态）=====
+# show-details=always：/actuator/health 返回各组件明细，含自定义 signalr 组件（连接状态/统计）
+# 注意：signalr 组件即使断开也返回 UP——IM 是「尽力而为」通道，断开时前端退化为轮询兜底，
+# 不拖垮整体 health 与容器 HEALTHCHECK；真实降级依靠 SignalrClient 周期 WARN 日志告警
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health,info

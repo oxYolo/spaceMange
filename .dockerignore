@@ -1,0 +1,32 @@
+# build context = 仓库根（docker build -f deploy/geodata-web.Dockerfile .）
+# 只放行：geodata-web/target/geodata-web.jar + deploy/ 下的构建产物
+
+# —— 运行数据 / 产物目录（挂载卷，不进镜像）——
+Data/
+Download/
+UploadFile/
+Thumbnail/
+Style/
+sdms/
+logs/
+nul
+build_model3d.log
+
+# —— 前端工程（1.3 万文件，与后端镜像无关）——
+geodata-web-ui/
+
+# —— 各模块构建中间产物（仅豁免主服务 fat jar）——
+**/target/*
+!geodata-web/target/geodata-web.jar
+
+# —— 源码与文档（已在 jar 内，context 不需要）——
+**/src/
+docs/
+sql/
+README.md
+
+# —— 本地工具文件 ——
+.workbuddy/
+.audit/
+.git/
+.gitignore

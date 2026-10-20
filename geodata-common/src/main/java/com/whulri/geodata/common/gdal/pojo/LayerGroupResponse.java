@@ -1,0 +1,10 @@
+package com.whulri.geodata.common.gdal.pojo;
+
+import lombok.Data;
+
+@Data
+public class LayerGroupResponse
+{
+
+    public LayerGroup LayerGroup ;
+}

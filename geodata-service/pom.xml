@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <artifactId>geodata-service</artifactId>
+    <version>1.0.0</version>
+    <name>geodata-service</name>
+    <description>空间数据管理-业务层（数据管理 + 数据发布，迁移自 dmsp-dataManagement-core + dmsp-dataRelease-core）</description>
+
+    <parent>
+        <groupId>com.whulri</groupId>
+        <artifactId>geodata-parent</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.whulri</groupId>
+            <artifactId>geodata-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- 三维转换核心框架（SPI + 跨平台进程执行器） -->
+        <dependency>
+            <groupId>com.whulri</groupId>
+            <artifactId>geodata-convert-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- 对象存储（三维数据分片上传/成果托管） -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-boot-starter</artifactId>
+        </dependency>
+
+        <!-- RabbitMQ：GIS 工具任务 / 拓扑检查异步队列 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+
+        <!-- SignalR：对接 .NET 实时消息服务（导入进度/任务结果推送） -->
+        <dependency>
+            <groupId>com.microsoft.signalr</groupId>
+            <artifactId>signalr</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

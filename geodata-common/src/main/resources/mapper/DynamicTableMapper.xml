@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.whulri.geodata.basecore.mapper.DynamicTableMapper">
+
+    <insert id="insertByTable">
+        INSERT INTO public.${tableName}(${filedKey}, "guid", "sid", "geom")
+        VALUES (${filedValue}, ${guid}, ${sid}, ${geom})
+    </insert>
+
+    <!--    <select id="getMaxMin" resultType="com.whulri.dataprocess.taskService.dto.drill.MaxMinDto">-->
+    <!--        SELECT max(${lon}) as maxx, min(${lon}) as minx, max(${lat}) as maxy, min(${lat}) as miny FROM ${tableName} AS VA-->
+    <!--    </select>-->
+
+    <select id="getMaxSidByTable" resultType="integer">
+        SELECT MAX(SID)
+        FROM ${tableName}
+    </select>
+
+    <select id="getMaxSIDFromTable" resultType="integer">
+        SELECT nextval(${tableName}::regclass)
+    </select>
+
+    <select id="getByTable" resultType="map">
+        SELECT *
+        FROM ${tableName}
+    </select>
+    <select id="getCountByGuid" resultType="java.lang.Integer">
+        select count(*)
+        from ${tableName}
+    </select>
+    <delete id="delByGuid">
+        DELETE
+        FROM ${tableName}
+        WHERE guid = #{guid}
+    </delete>
+
+    <!-- 判断表是否存在 -->
+    <select id="existTable" resultType="java.lang.Integer">
+        select count(*)
+        from pg_class
+        where relname = ${tableName}
+    </select>
+
+    <select id="getColumnFromTable" resultType="java.lang.String">
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = '${tableName}'
+    </select>
+
+    <select id="dynamicExecute" resultType="java.util.Map">
+        ${sql}
+    </select>
+
+    <insert id="dynamicInsertExecute">
+        ${sql}
+    </insert>
+
+    <update id="dynamicUpdateExecute">
+        ${sql}
+    </update>
+
+    <update id="updateByGuid">
+        UPDATE public.${tableName} SET
+        <foreach collection="filedMap" item="value" index="key" separator=",">
+            ${key} = #{value}
+        </foreach>
+        WHERE guid = ${guid}
+    </update>
+
+    <update id="updateByFileInfoGuid">
+        UPDATE public.${tableName} SET
+        <foreach collection="filedMap" item="value" index="key" separator=",">
+            ${key} = #{value}
+        </foreach>
+        WHERE guid = (SELECT datasource FROM sdms_fileinfo WHERE guid=#{guid})
+    </update>
+
+    <!-- 批量插入，含几何字段 -->
+    <insert id="batchInsertWithGeom" parameterType="map">
+        INSERT INTO ${tableName} (
+        geom
+        <foreach collection="attrNames" item="name" separator=",">
+            ,"${name}"
+        </foreach>
+        ) VALUES
+        <foreach collection="records" item="r" separator=",">
+            (
+            ST_GeomFromText(#{r.wkt}, #{srid})
+            <foreach collection="attrNames" item="name" separator=",">
+                ,#{r.${name}}
+            </foreach>
+            )
+        </foreach>
+    </insert>
+
+</mapper>

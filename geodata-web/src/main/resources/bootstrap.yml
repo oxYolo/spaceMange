@@ -1,0 +1,45 @@
+server:
+  port: 8982
+
+spring:
+  application:
+    name: geodata-service
+  profiles:
+    active: dev
+  cloud:
+    nacos:
+      discovery:
+        enabled: false
+        server-addr: 127.0.0.1:8848
+      config:
+        enabled: false
+        server-addr: 127.0.0.1:8848
+
+# Jackson 全局时间格式
+spring.jackson:
+  date-format: yyyy-MM-dd HH:mm:ss
+  time-zone: GMT+8
+
+# MyBatis-Plus
+mybatis-plus:
+  mapper-locations: classpath:mapper/**/*.xml
+  typeAliasesPackage: com.whulri.geodata.common.entity,com.whulri.geodata.model3d.entity
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+  configuration:
+    jdbc-type-for-null: other
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+# ===== Actuator 观测 =====
+# signalr 健康组件断开时仍返回 UP（IM 为尽力而为通道，不拖垮容器 HEALTHCHECK），明细见 health details
+management:
+  endpoint:
+    health:
+      show-details: always
+  endpoints:
+    web:
+      exposure:
+        include: health,info

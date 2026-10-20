@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.whulri.geodata.basecore.mapper.LayerFieldMapper">
+
+    <select id="getLayerFieldById" resultType="com.whulri.geodata.common.vo.AttributeModel">
+
+        SELECT
+               ROW_NUMBER() OVER (ORDER BY lf.AttributeName) AS attributeApproxOK,
+               lf.AttributeName,
+               COALESCE(ddc.CodeValue, '') as AttributeTypeName,
+               lf.AttributeLength as AttributeWidth,
+               lf.AttributePrecision
+        FROM sdms_layerfield lf
+                 LEFT JOIN
+             sdms_dictdatacode ddc
+             ON lf.AttributeType = ddc.Id AND ddc.DataTypeID = '73160096-67a5-11e7-8eb2-005056bb1c7e'
+        WHERE lf.LayerID = #{layerId};
+
+    </select>
+
+
+</mapper>

@@ -1,0 +1,6 @@
+com.whulri.geodata.common.config.CommonAutoConfiguration
+com.whulri.geodata.common.config.AppSettingConfig
+com.whulri.geodata.common.config.DataBaseConfig
+com.whulri.geodata.common.config.WebMvcConfig
+com.whulri.geodata.common.config.JacksonConfig
+com.whulri.geodata.basecore.config.BaseCoreAutoConfiguration

@@ -1,0 +1,2198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>低空监管数据中台 · 数据管理平台原型</title>
+<style>
+  :root{
+    --bg:#f0f2f5;
+    --card:#ffffff;
+    --primary:#2b7cff;
+    --primary-dark:#1a63d8;
+    --primary-weak:#eaf2ff;
+    --text:#1f2937;
+    --text-2:#5b6675;
+    --text-3:#98a2b3;
+    --border:#e6e9f0;
+    --border-2:#d8dee9;
+    --success:#1fa463;
+    --danger:#e5484d;
+    --warning:#e08b1b;
+    --radius:8px;
+    --shadow:0 2px 10px rgba(23,42,73,.06);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  html,body{height:100%;}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei","Helvetica Neue",Arial,sans-serif;
+    background:var(--bg);color:var(--text);font-size:13px;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app{display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+
+  /* ---------- 顶栏 ---------- */
+  .topbar{
+    height:56px;flex:0 0 56px;background:#fff;border-bottom:1px solid var(--border);
+    display:flex;align-items:center;padding:0 20px;gap:14px;z-index:20;
+  }
+  .logo{
+    width:30px;height:30px;border-radius:8px;
+    background:linear-gradient(135deg,#2b7cff,#38bdf8);
+    display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:15px;
+    box-shadow:0 3px 8px rgba(43,124,255,.35);
+  }
+  .sys-name{font-size:16px;font-weight:600;letter-spacing:.3px;}
+  .sys-sub{font-size:12px;color:var(--text-3);padding-left:12px;margin-left:12px;border-left:1px solid var(--border-2);}
+  .topbar-right{margin-left:auto;display:flex;align-items:center;gap:18px;color:var(--text-2);font-size:12.5px;}
+  .topbar-right .ic{width:18px;height:18px;stroke:var(--text-2);fill:none;stroke-width:1.6;}
+  .avatar{display:flex;align-items:center;gap:8px;}
+  .avatar i{
+    width:28px;height:28px;border-radius:50%;background:var(--primary-weak);color:var(--primary);
+    display:flex;align-items:center;justify-content:center;font-style:normal;font-weight:600;font-size:12px;
+  }
+
+  /* ---------- 布局 ---------- */
+  .body{flex:1;display:flex;min-height:0;}
+  .sidebar{
+    width:212px;flex:0 0 212px;background:#fff;border-right:1px solid var(--border);
+    padding:14px 10px;overflow:auto;
+  }
+  .menu-label{font-size:11px;color:var(--text-3);padding:8px 10px 6px;letter-spacing:1px;}
+  .menu-item{
+    display:flex;align-items:center;gap:9px;height:38px;padding:0 12px;border-radius:6px;
+    color:var(--text-2);cursor:pointer;font-size:13.5px;margin-bottom:2px;user-select:none;
+    transition:background .15s,color .15s;
+  }
+  .menu-item:hover{background:#f6f8fc;color:var(--text);}
+  .menu-item.active{background:var(--primary-weak);color:var(--primary);font-weight:600;}
+  .menu-item.active .dot{background:var(--primary);}
+  .menu-item .dot{width:6px;height:6px;border-radius:50%;background:var(--border-2);}
+
+  .main{flex:1;min-width:0;overflow:auto;padding:16px 18px 40px;}
+  .crumb{font-size:12.5px;color:var(--text-3);margin-bottom:12px;}
+  .crumb b{color:var(--text-2);font-weight:400;}
+  .page-head{display:flex;align-items:center;margin-bottom:14px;}
+  .page-title{font-size:17px;font-weight:600;}
+  .page-desc{font-size:12.5px;color:var(--text-3);margin-left:12px;}
+
+  /* ---------- 卡片 / 筛选 ---------- */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);}
+  .filter{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px 16px;}
+  .sel,.inp{position:relative;display:inline-flex;align-items:center;}
+  .sel select,.inp input{
+    height:32px;border:1px solid var(--border-2);border-radius:5px;background:#fff;
+    padding:0 12px;font-size:13px;color:var(--text);outline:none;font-family:inherit;
+  }
+  .sel select{appearance:none;-webkit-appearance:none;padding-right:28px;min-width:148px;cursor:pointer;color:var(--text-2);}
+  .sel select:focus,.inp input:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(43,124,255,.12);}
+  .sel::after{
+    content:"";position:absolute;right:11px;width:6px;height:6px;border-right:1.4px solid #98a2b3;
+    border-bottom:1.4px solid #98a2b3;transform:rotate(45deg) translateY(-2px);pointer-events:none;
+  }
+  .inp input{width:210px;padding-left:31px;}
+  .inp .glass{position:absolute;left:10px;width:13px;height:13px;stroke:#a8b1bf;fill:none;stroke-width:1.8;}
+  .btn{
+    height:32px;padding:0 15px;border-radius:5px;border:1px solid var(--border-2);background:#fff;
+    color:var(--text-2);font-size:13px;cursor:pointer;font-family:inherit;transition:all .15s;
+    display:inline-flex;align-items:center;gap:6px;
+  }
+  .btn:hover{border-color:#b9c3d1;color:var(--text);}
+  .btn-primary{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .btn-primary:hover{background:var(--primary-dark);border-color:var(--primary-dark);color:#fff;}
+  .btn-plain{border-color:transparent;background:#f3f5f9;color:var(--text-2);}
+  .btn-plain:hover{background:#eaeef5;}
+  .btn:disabled{opacity:.5;cursor:not-allowed;}
+  .btn.btn-primary:disabled{background:#c8d4e6;border-color:#c8d4e6;color:#fff;}
+  .spacer{flex:1;}
+  .filter-tip{font-size:12px;color:var(--text-3);}
+
+  /* ---------- 表格 ---------- */
+  .table-wrap{overflow:auto;}
+  table{width:100%;border-collapse:collapse;min-width:1080px;}
+  thead th{
+    background:#fafbfd;color:var(--text-2);font-weight:600;font-size:12.5px;text-align:left;
+    padding:11px 14px;border-bottom:1px solid var(--border);white-space:nowrap;
+  }
+  tbody td{padding:12px 14px;border-bottom:1px solid #f1f3f8;font-size:13px;color:var(--text-2);vertical-align:middle;}
+  tbody tr:hover{background:#f8faff;}
+  tbody tr.sel-row{background:#f4f8ff;}
+  td.name{color:var(--text);font-weight:500;}
+  .muted{color:var(--text-3);}
+  .sortable{cursor:pointer;user-select:none;}
+  .sortable .arrows{display:inline-flex;flex-direction:column;margin-left:5px;vertical-align:middle;line-height:0;}
+  .sortable .arrows i{
+    display:block;width:0;height:0;border-left:3.5px solid transparent;border-right:3.5px solid transparent;
+  }
+  .sortable .arrows i:first-child{border-bottom:4px solid #c3cad6;margin-bottom:2px;}
+  .sortable .arrows i:last-child{border-top:4px solid #c3cad6;}
+  .sortable.asc .arrows i:first-child{border-bottom-color:var(--primary);}
+  .sortable.desc .arrows i:last-child{border-top-color:var(--primary);}
+  /* 表头筛选漏斗 */
+  .th-filter{cursor:pointer;user-select:none;}
+  .th-filter .funnel{
+    display:inline-block;width:10px;height:10px;margin-left:6px;vertical-align:-1px;
+    fill:none;stroke:#b6bfcc;stroke-width:2;transition:stroke .15s;
+  }
+  .th-filter:hover .funnel{stroke:var(--primary);}
+  .th-filter.on{color:var(--primary);}
+  .th-filter.on .funnel{stroke:var(--primary);}
+  .th-pop{
+    position:fixed;z-index:60;min-width:152px;background:#fff;
+    border:1px solid var(--border-2);border-radius:6px;box-shadow:0 8px 26px rgba(15,34,67,.16);
+    padding:5px;font-weight:400;
+  }
+  .th-pop-item{
+    padding:7px 10px;border-radius:5px;font-size:12.5px;color:var(--text-2);cursor:pointer;white-space:nowrap;
+  }
+  .th-pop-item:hover{background:#f5f8ff;color:var(--text);}
+  .th-pop-item.on{background:#f2f7ff;color:var(--primary);font-weight:600;}
+  /* 标签（更新状态） */
+  .tag{
+    display:inline-block;font-size:12px;line-height:20px;padding:1px 9px;border-radius:4px;
+    white-space:nowrap;
+  }
+  .tag-ok{color:#1d8a55;background:#e9f8f0;border:1px solid #cdeede;}
+  .tag-no{color:#7b8697;background:#f1f3f7;border:1px solid #e5e9ef;}
+  .tag-run{color:#a9710d;background:#fff8ea;border:1px solid #f3e0b0;}
+  /* 切片状态：无状态显示占位短横 */
+  .dash{color:#bcc3ce;}
+
+  .status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;}
+  .status .d{width:7px;height:7px;border-radius:50%;flex:0 0 7px;}
+  .s-ok .d{background:var(--success);}
+  .s-ok{color:var(--success);}
+  .s-err .d{background:var(--danger);}
+  .s-err{color:var(--danger);}
+  .s-run .d{background:var(--warning);animation:blink 1s infinite;}
+  .s-run{color:var(--warning);}
+  .s-off .d{background:#bcc3ce;}
+  .s-off{color:var(--text-3);}
+  /* 使用状态开关（点击即切换 启用/禁用） */
+  .sw-wrap{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;}
+  .sw{
+    position:relative;width:38px;height:20px;flex:0 0 38px;border-radius:10px;
+    background:#d3d9e3;transition:background .2s;
+  }
+  .sw::after{
+    content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 3px rgba(20,35,60,.25);transition:transform .2s;
+  }
+  .sw-wrap.on .sw{background:var(--success);}
+  .sw-wrap.on .sw::after{transform:translateX(18px);}
+  .sw-txt{font-size:12.5px;color:var(--text-3);min-width:26px;}
+  .sw-wrap.on .sw-txt{color:var(--success);}
+  .sw-wrap:hover .sw{box-shadow:0 0 0 3px rgba(43,124,255,.10);}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.25}}
+  .pbar{
+    margin-top:5px;height:5px;border-radius:3px;background:#eef1f6;overflow:hidden;width:118px;
+  }
+  .pbar i{
+    display:block;height:100%;border-radius:3px;
+    background:linear-gradient(90deg,#e08b1b,#f5b544);transition:width .3s;
+  }
+
+  .op-link{color:var(--primary);cursor:pointer;font-size:13px;background:none;border:none;padding:0;font-family:inherit;}
+  .op-link:hover{text-decoration:underline;}
+  .op-del{color:var(--danger);}
+  .op-dis{color:#bcc3ce;cursor:not-allowed;}  .op-dis:hover{text-decoration:none;}
+  .op-sep{color:var(--border-2);margin:0 8px;}
+  /* 列表内服务地址：只展示复制按钮 */
+  .addr{display:inline-block;}
+  .addr .cp{
+    display:inline-flex;align-items:center;gap:3px;cursor:pointer;
+    font-size:12px;color:var(--primary);background:#eef4ff;border:1px solid #d6e4ff;
+    border-radius:4px;padding:3px 8px;font-family:inherit;white-space:nowrap;transition:all .15s;
+  }
+  .addr .cp:hover{background:#e2ecff;border-color:#bcd5ff;}
+  .addr .cp.done{color:#127a48;background:#eefaf3;border-color:#c2e9d5;}
+
+  input[type=checkbox].cb{
+    appearance:none;-webkit-appearance:none;width:15px;height:15px;border:1px solid var(--border-2);
+    border-radius:3px;background:#fff;cursor:pointer;position:relative;transition:all .15s;vertical-align:middle;
+  }
+  input[type=checkbox].cb:hover{border-color:var(--primary);}
+  input[type=checkbox].cb:checked{background:var(--primary);border-color:var(--primary);}
+  input[type=checkbox].cb:checked::after{
+    content:"";position:absolute;left:4.5px;top:1.5px;width:4px;height:8px;
+    border-right:1.6px solid #fff;border-bottom:1.6px solid #fff;transform:rotate(42deg);
+  }
+  input[type=checkbox].cb:indeterminate{background:var(--primary);border-color:var(--primary);}
+  input[type=checkbox].cb:indeterminate::after{
+    content:"";position:absolute;left:3px;top:6px;width:7px;height:1.6px;background:#fff;
+  }
+
+  /* ---------- 分页 ---------- */
+  .pager{display:flex;align-items:center;gap:8px;padding:14px 16px;flex-wrap:wrap;}
+  .pager .total{color:var(--text-3);font-size:12.5px;}
+  .pg{
+    min-width:28px;height:28px;padding:0 7px;border:1px solid var(--border-2);background:#fff;border-radius:5px;
+    color:var(--text-2);cursor:pointer;font-size:12.5px;font-family:inherit;
+  }
+  .pg:hover:not(:disabled){border-color:var(--primary);color:var(--primary);}
+  .pg.active{background:var(--primary);border-color:var(--primary);color:#fff;}
+  .pg:disabled{opacity:.45;cursor:not-allowed;}
+  .pager .gap{color:var(--text-3);padding:0 2px;}
+  .pager .sel select{height:28px;min-width:92px;font-size:12.5px;}
+
+  /* ---------- 弹窗 ---------- */
+  .overlay{
+    position:fixed;inset:0;background:rgba(20,32,52,.45);display:flex;align-items:center;justify-content:center;
+    z-index:100;padding:24px;opacity:0;pointer-events:none;transition:opacity .18s;
+  }
+  .overlay.show{opacity:1;pointer-events:auto;}
+  .dialog{
+    background:#fff;border-radius:10px;box-shadow:0 16px 48px rgba(15,30,60,.25);
+    width:520px;max-width:100%;max-height:90vh;display:flex;flex-direction:column;
+    transform:translateY(10px) scale(.98);transition:transform .18s;
+  }
+  .overlay.show .dialog{transform:none;}
+  .dialog.wide{width:940px;}
+  /* 右侧抽屉式弹窗（上传数据 / 编辑数据） */
+  .overlay.right{justify-content:flex-end;align-items:stretch;padding:0;}
+  .overlay.right .dialog{
+    margin:0;height:100%;max-height:100%;width:520px;border-radius:0;
+    transform:translateX(48px);transition:transform .22s ease-out;
+    box-shadow:-12px 0 40px rgba(15,30,60,.18);
+  }
+  .overlay.right.show .dialog{transform:none;}
+  .overlay.right .dlg-body{flex:1;}
+  .dlg-head{display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid var(--border);}
+  .dlg-head h3{font-size:15px;font-weight:600;}
+  .dlg-close{margin-left:auto;background:none;border:none;font-size:19px;color:var(--text-3);cursor:pointer;line-height:1;}
+  .dlg-close:hover{color:var(--text);}
+  .dlg-body{padding:18px 20px;overflow:auto;}
+  .dlg-foot{display:flex;justify-content:flex-end;gap:10px;padding:13px 20px;border-top:1px solid var(--border);}
+  .field{margin-bottom:15px;position:relative;}
+  .field label{display:block;font-size:13px;color:var(--text-2);margin-bottom:6px;}
+  .field label .req{color:var(--danger);margin-right:3px;}
+  .field input[type=text],.field select,.field textarea{
+    width:100%;height:34px;border:1px solid var(--border-2);border-radius:5px;padding:0 11px;
+    font-size:13px;color:var(--text);outline:none;font-family:inherit;background:#fff;
+  }
+  .field textarea{height:70px;padding:8px 11px;resize:vertical;line-height:1.55;}
+  .field select{appearance:none;-webkit-appearance:none;cursor:pointer;
+    background-image:linear-gradient(45deg,transparent 50%,#98a2b3 50%),linear-gradient(135deg,#98a2b3 50%,transparent 50%);
+    background-position:calc(100% - 15px) 14px,calc(100% - 10px) 14px;background-size:5px 5px,5px 5px;background-repeat:no-repeat;}
+  .field input[readonly]{background:#f6f7fa;color:var(--text-2);}
+  .field input:disabled,.field select:disabled,.field textarea:disabled{
+    background:#f3f5f9;color:#a3acba;border-color:#e6e9f0;cursor:not-allowed;
+  }
+  .field input:focus,.field select:focus,.field textarea:focus{border-color:var(--primary);box-shadow:0 0 0 2px rgba(43,124,255,.12);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 14px;}
+  .hint{font-size:12px;color:var(--text-3);margin-top:6px;}
+  /* 多选下拉（服务格式） */
+  .msel{position:relative;}
+  .msel-box{
+    min-height:34px;display:flex;align-items:center;flex-wrap:wrap;gap:6px;cursor:pointer;
+    border:1px solid var(--border-2);border-radius:5px;background:#fff;padding:4px 30px 4px 10px;
+    transition:border-color .15s,box-shadow .15s;
+  }
+  .msel.open .msel-box,.msel-box:hover{border-color:var(--primary);}
+  .msel.open .msel-box{box-shadow:0 0 0 2px rgba(43,124,255,.12);}
+  .msel-box::after{
+    content:"";position:absolute;right:12px;top:14px;width:6px;height:6px;
+    border-right:1.4px solid #98a2b3;border-bottom:1.4px solid #98a2b3;
+    transform:rotate(45deg) translateY(-2px);pointer-events:none;transition:transform .15s;
+  }
+  .msel.open .msel-box::after{transform:rotate(-135deg) translateY(-2px);}
+  .msel-ph{font-size:13px;color:#a8b1bf;line-height:24px;}
+  .msel-tag{
+    display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--primary);
+    background:#eef4ff;border:1px solid #d6e4ff;border-radius:4px;padding:2px 6px;line-height:18px;
+  }
+  .msel-tag i{font-style:normal;color:#8fb2ee;cursor:pointer;font-size:13px;line-height:1;}
+  .msel-tag i:hover{color:var(--danger);}
+  .msel-pop{
+    position:absolute;top:calc(100% + 5px);left:0;right:0;z-index:50;background:#fff;
+    border:1px solid var(--border-2);border-radius:6px;box-shadow:0 8px 26px rgba(15,34,67,.16);
+    padding:5px;max-height:212px;overflow:auto;
+  }
+  .msel-pop label{
+    display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:5px;
+    font-size:13px;color:var(--text-2);cursor:pointer;margin:0;
+  }
+  .msel-pop label:hover{background:#f5f8ff;color:var(--text);}
+  .msel-pop label.on{color:var(--primary);font-weight:600;background:#f2f7ff;}
+  .drop{
+    border:1.5px dashed var(--border-2);border-radius:8px;background:#fbfcfe;padding:26px 16px;text-align:center;
+    cursor:pointer;transition:all .15s;
+  }
+  .drop:hover{border-color:var(--primary);background:#f5f9ff;}
+  /* 上传方式：极简单行单选（选中项文字变蓝） */
+  .src-row{display:flex;gap:28px;align-items:center;margin-bottom:14px;}
+  .rd{display:inline-flex;align-items:center;gap:7px;font-size:13.5px;color:#8b95a5;cursor:pointer;user-select:none;}
+  .rd span{transition:color .15s;}
+  .rd input{
+    appearance:none;-webkit-appearance:none;width:15px;height:15px;border:1px solid var(--border-2);
+    border-radius:50%;background:#fff;cursor:pointer;position:relative;transition:all .15s;margin:0;flex:0 0 15px;
+  }
+  .rd input:hover{border-color:var(--primary);}
+  .rd input:checked{border:4.5px solid var(--primary);}
+  .rd input:checked ~ span{color:var(--primary);font-weight:600;}
+  #f-dir{margin-top:0;}
+  #f-dir-box .hint{margin-top:6px;}
+  .drop .big{font-size:13.5px;color:var(--text-2);}
+  .drop .big b{color:var(--primary);font-weight:500;}
+  .drop .small{font-size:12px;color:var(--text-3);margin-top:5px;}
+  .file-chip{
+    display:flex;align-items:center;gap:9px;border:1px solid var(--border);background:#f8fafd;
+    border-radius:6px;padding:9px 11px;margin-top:10px;font-size:12.5px;color:var(--text-2);
+  }
+  .file-chip .nm{color:var(--text);}
+  .file-chip .x{margin-left:auto;color:var(--text-3);cursor:pointer;}
+  .file-chip .x:hover{color:var(--danger);}
+  .bar{height:6px;border-radius:4px;background:#eaeef5;overflow:hidden;margin-top:9px;}
+  .bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,#2b7cff,#57b8ff);transition:width .3s;}
+  .prog-txt{font-size:12px;color:var(--text-3);margin-top:6px;display:flex;}
+  .prog-txt span:last-child{margin-left:auto;}
+  /* 上传弹窗：格式识别提示 + 支持格式说明 */
+  .detect{
+    margin-top:10px;padding:8px 10px;border-radius:6px;font-size:12px;line-height:1.7;
+    background:#f6f7fa;color:var(--text-2);border:1px dashed var(--border-2);
+  }
+  .detect b{color:var(--text);font-weight:600;}
+  .detect.ok{background:#eefaf3;border-color:#c2e9d5;color:#1d8a55;}
+  .detect.ok b{color:#127a48;}
+  .detect.warn{background:#fff8ea;border-color:#f3e0b0;color:#a9710d;}
+  .detect.warn b{color:#8c5c05;}
+  .fmt-box{border:1px solid var(--border);border-radius:7px;background:#fbfcfe;overflow:hidden;}
+  .fmt-row{
+    display:flex;align-items:center;gap:10px;padding:6px 11px;font-size:12.5px;
+    border-bottom:1px solid var(--border);
+  }
+  .fmt-row:last-child{border-bottom:none;}
+  .fmt-row .t{width:122px;flex:none;color:var(--text-2);}
+  .fmt-row .f{display:flex;flex-wrap:wrap;gap:6px;}
+  .fmt-row .f b{
+    font-weight:500;font-size:11.5px;line-height:17px;padding:0 7px;border-radius:4px;
+    color:var(--primary);background:#eef4ff;border:1px solid #d6e4ff;
+  }
+  .fmt-note{font-size:11.5px;color:var(--text-3);margin-top:6px;}
+  /* 格式说明：默认隐藏，点感叹号图标弹出 */
+  .fmt-trigger{
+    display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;
+    border-radius:50%;border:1px solid var(--border-2);background:#fff;color:var(--text-3);
+    font-size:10px;font-weight:700;line-height:1;margin-left:6px;cursor:pointer;
+    user-select:none;vertical-align:1px;transition:all .15s;
+  }
+  .fmt-trigger:hover{color:var(--primary);border-color:var(--primary);background:#f5f9ff;}
+  .fmt-pop{
+    position:absolute;top:28px;left:0;z-index:40;width:400px;background:#fff;
+    border:1px solid var(--border);border-radius:8px;padding:11px 12px 12px;
+    box-shadow:0 8px 26px rgba(15,34,67,.16);
+  }
+  .fmt-pop-head{
+    display:flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;
+    color:var(--text);margin-bottom:8px;
+  }
+  .fmt-pop-head::before{content:'';width:3px;height:12px;border-radius:2px;background:var(--primary);}
+
+  /* 预览：占据主内容区（右侧栏 + 顶栏之外，即面包屑到底部翻页器的范围） */
+  .overlay.area{
+    top:56px;right:0;bottom:0;left:212px;padding:0;
+    align-items:stretch;justify-content:stretch;background:rgba(20,32,52,.30);
+  }
+  .overlay.area .dialog{
+    width:100%;height:100%;max-height:100%;border-radius:0;box-shadow:none;
+    transform:translateY(8px);transition:transform .2s ease-out;
+  }
+  .overlay.area.show .dialog{transform:none;}
+  .overlay.area .dlg-body{flex:1;min-height:0;padding:0;overflow:hidden;display:flex;}
+  .pv-wrap{flex:1;display:flex;min-height:0;width:100%;}
+  .pv-stage{
+    position:relative;flex:1;min-width:0;overflow:hidden;display:flex;align-items:center;justify-content:center;
+    background:linear-gradient(180deg,#dbe9f9 0%,#f2f7fd 60%,#eaf1f9 60%,#dfe9f5 100%);
+  }
+  .pv-stage svg{display:block;width:100%;height:100%;}
+  .pv-side{
+    width:320px;flex:none;border-left:1px solid var(--border);background:#fff;
+    padding:18px 20px 26px;overflow:auto;
+  }
+  .vp-tools{
+    position:absolute;left:10px;top:10px;display:flex;gap:6px;flex-wrap:wrap;z-index:2;
+  }
+  .vp-tools span{
+    background:rgba(255,255,255,.9);border:1px solid rgba(200,214,232,.9);border-radius:4px;
+    font-size:11.5px;color:#43536b;padding:3px 8px;backdrop-filter:blur(4px);
+  }
+  .vp-scale{
+    position:absolute;right:12px;bottom:10px;background:rgba(255,255,255,.9);border-radius:4px;
+    font-size:11px;color:#43536b;padding:3px 8px;border:1px solid rgba(200,214,232,.9);
+  }
+  .panel-title{font-size:12.5px;color:var(--text-3);margin:2px 0 9px;font-weight:600;}
+  .info-row{display:flex;font-size:12.5px;padding:7px 0;border-bottom:1px dashed #eef1f6;}
+  .info-row .k{color:var(--text-3);flex:0 0 74px;}
+  .info-row .v{color:var(--text-2);word-break:break-all;}
+  /* 详情弹窗：备注块 + 详情内信息行加宽 */
+  .detail-note{
+    font-size:12.5px;line-height:1.7;color:var(--text-2);background:#f7f9fc;
+    border:1px solid var(--border);border-radius:6px;padding:9px 11px;white-space:pre-wrap;
+  }
+  .detail .info-row .k,.info-row .k{flex:0 0 84px;}
+
+  /* ---------- 图层配置 ---------- */
+  /* 顶部筛选条 */
+  .lay-filter{
+    display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);
+  }
+  .lay-filter .fld{display:flex;align-items:center;gap:8px;}
+  .lay-filter .fld > span{font-size:12.5px;color:var(--text-3);white-space:nowrap;}
+  .lay-filter .inp input{width:190px;}
+  /* 左右两栏 */
+  .layer-grid{display:grid;grid-template-columns:288px 1fr;gap:14px;align-items:start;}
+  @media (max-width:1280px){.layer-grid{grid-template-columns:1fr;}}
+  /* 左：目录树 */
+  .tree-panel{padding:12px 10px 6px;}
+  .add-dir{
+    width:100%;height:36px;border:1px solid #c9dcf8;border-radius:7px;background:#f2f8ff;color:var(--primary);
+    font-size:13px;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:5px;
+    transition:all .15s;
+  }
+  .add-dir:hover{background:#e8f2ff;border-color:var(--primary);}
+  .tree-root{
+    display:flex;align-items:center;gap:7px;height:34px;padding:0 6px;border-radius:6px;margin-top:10px;
+    font-size:13px;color:var(--text-2);font-weight:600;user-select:none;
+  }
+  .tree{padding:4px 0 10px;min-height:360px;max-height:calc(100vh - 320px);overflow:auto;}
+  .trow{
+    display:flex;align-items:center;gap:6px;height:32px;padding:0 5px;border-radius:6px;
+    cursor:pointer;font-size:13px;color:var(--text-2);transition:background .12s;
+  }
+  .trow:hover{background:#f5f8fd;}
+  .trow.sel{background:var(--primary-weak);color:var(--primary);font-weight:600;}
+  .trow.sel .tico.layer{fill:var(--primary);}
+  .trow.dragover{background:#eef4ff;box-shadow:inset 0 0 0 1.5px var(--primary);}
+  .caret{
+    width:13px;height:13px;flex:0 0 13px;display:inline-flex;align-items:center;justify-content:center;
+    color:#9aa5b5;font-size:8px;transition:transform .15s;user-select:none;
+  }
+  .caret.open{transform:rotate(90deg);}
+  .caret.leaf{visibility:hidden;}
+  .tico{width:15px;height:15px;flex:0 0 15px;}
+  .tico.folder{fill:#f2c14e;}
+  .tico.layer{fill:#a3b6d4;}
+  .tname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .tacts{display:none;align-items:center;gap:0;margin-left:2px;}
+  .trow:hover .tacts,.trow.sel .tacts{display:inline-flex;}
+  .tact{
+    width:20px;height:20px;border:none;background:none;border-radius:4px;color:#93a0b2;cursor:pointer;
+    font-size:12px;line-height:1;display:inline-flex;align-items:center;justify-content:center;font-family:inherit;
+  }
+  .tact:hover{background:#e7edf7;color:var(--primary);}
+  .tact.del:hover{background:#fdecec;color:var(--danger);}
+  .tchildren{margin-left:14px;border-left:1px dashed #e5eaf2;padding-left:4px;}
+  .tree-drop{padding:2px 0;}
+  .tree-empty{font-size:12.5px;color:var(--text-3);padding:34px 14px;line-height:1.9;text-align:center;}
+  /* 右：服务表格 */
+  .svc-table th{background:#f7f9fc;}
+  .svc-table td{padding:11px 14px;}
+  .svc-table tr.in-tree{background:#f7fbff;}
+  .svc-table .ops{display:flex;align-items:center;gap:2px;}
+  .icobtn{
+    width:24px;height:24px;border:none;background:none;border-radius:5px;cursor:pointer;
+    display:inline-flex;align-items:center;justify-content:center;color:#8fa0b6;font-size:13px;font-family:inherit;
+  }
+  .icobtn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7;}
+  .icobtn:hover{background:#eef3fa;color:var(--primary);}
+  .icobtn.del:hover{background:#fdecec;color:var(--danger);}
+  .icobtn.dis{color:#c6ccd6;cursor:not-allowed;}
+  .icobtn.dis:hover{background:none;color:#c6ccd6;}
+  .url-cell{
+    font-family:Consolas,Monaco,monospace;font-size:12px;color:#4a5a70;
+    max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .lay-tip{font-size:12.5px;color:var(--text-3);}
+  .lay-tip.warn{color:var(--warning);}
+  .url-box{
+    margin-top:6px;display:flex;gap:6px;align-items:center;background:#f6f8fc;border:1px solid var(--border);
+    border-radius:5px;padding:6px 8px;font-size:12px;color:#3c4b60;font-family:Consolas,Monaco,monospace;
+  }
+  .url-box span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .copy{color:var(--primary);cursor:pointer;font-family:inherit;flex:0 0 auto;}
+  .layer{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text-2);padding:6px 0;}
+  .layer .sw{width:9px;height:9px;border-radius:2px;}
+
+  /* ---------- Toast ---------- */
+  .toasts{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:200;display:flex;flex-direction:column;gap:9px;align-items:center;}
+  .toast{
+    background:#fff;border:1px solid var(--border);border-radius:7px;box-shadow:0 6px 20px rgba(20,35,60,.13);
+    padding:9px 15px;font-size:13px;color:var(--text);display:flex;align-items:center;gap:8px;
+    animation:drop .22s ease-out;
+  }
+  @keyframes drop{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+  .toast .d{width:7px;height:7px;border-radius:50%;background:var(--success);}
+  .toast.warn .d{background:var(--warning);}
+  .toast.err .d{background:var(--danger);}
+
+  .hidden{display:none !important;}
+  .batch-bar{display:flex;align-items:center;gap:12px;padding:0 16px 12px;font-size:12.5px;color:var(--text-2);}
+  .batch-bar b{color:var(--primary);font-weight:600;}
+  @media (max-width:1180px){
+    .sidebar{display:none;}
+    .overlay.area{left:0;}
+    .pv-side{width:270px;}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="logo">低</div>
+    <div class="sys-name">低空监管数据中台</div>
+    <div class="sys-sub">数据管理平台</div>
+    <div class="topbar-right">
+      <div class="avatar"><i>超</i><span>超级管理员</span></div>
+    </div>
+  </header>
+
+  <div class="body">
+    <aside class="sidebar">
+      <div class="menu-item active" data-page="upload"><span class="dot"></span>数据管理</div>
+      <div class="menu-item" data-page="publish"><span class="dot"></span>服务管理</div>
+      <div class="menu-item" data-page="layer"><span class="dot"></span>图层配置</div>
+    </aside>
+
+    <main class="main">
+      <div class="crumb">首页 / <b id="crumb-current">数据管理</b></div>
+
+      <!-- ================= 数据管理 ================= -->
+      <section class="page" id="page-upload">
+        <div class="page-head">
+          <div class="page-title">数据管理</div>
+        </div>
+
+        <div class="card">
+          <div class="filter">
+            <div class="sel">
+              <select id="up-type">
+                <option value="">请选择数据类型</option>
+                <option value="矢量数据">矢量数据</option>
+                <option value="栅格数据">栅格数据（DOM）</option>
+                <option value="地形数据">地形数据（DEM）</option>
+                <option value="倾斜模型数据">倾斜模型数据</option>
+                <option value="白模数据">白模数据</option>
+                <option value="点云数据">点云数据</option>
+              </select>
+            </div>
+            <div class="sel">
+              <select id="up-status">
+                <option value="">请选择上传状态</option>
+                <option>数据上传中</option>
+                <option>数据上传成功</option>
+                <option>数据上传失败</option>
+              </select>
+            </div>
+            <div class="inp">
+              <svg class="glass" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="6"/><path d="M13 13l4.5 4.5"/></svg>
+              <input type="text" id="up-kw" placeholder="请输入数据名称/上传人">
+            </div>
+            <button class="btn btn-primary" id="up-search">搜索</button>
+            <button class="btn btn-plain" id="up-reset">重置</button>
+            <div class="spacer"></div>
+            <button class="btn btn-primary" id="up-new">＋ 上传数据</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:14px;">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:210px;">数据名称</th>
+                  <th style="width:120px;">数据类型</th>
+                  <th style="width:110px;">数据格式</th>
+                  <th style="width:100px;">数据大小</th>
+                  <th style="width:110px;">上传人</th>
+                  <th style="width:180px;" class="sortable" id="up-sort-time">上传时间<span class="arrows"><i></i><i></i></span></th>
+                  <th style="width:160px;">上传状态</th>
+                  <th style="width:230px;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="up-tbody"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="up-pager"></div>
+        </div>
+      </section>
+
+      <!-- ================= 服务管理 ================= -->
+      <section class="page hidden" id="page-publish">
+        <div class="page-head">
+          <div class="page-title">服务管理</div>
+        </div>
+
+        <div class="card">
+          <div class="filter">
+            <div class="sel">
+              <select id="pb-type">
+                <option value="">请选择数据类型</option>
+                <option value="矢量数据">矢量数据</option>
+                <option value="栅格数据">栅格数据（DOM）</option>
+                <option value="地形数据">地形数据（DEM）</option>
+                <option value="倾斜模型数据">倾斜模型数据</option>
+                <option value="白模数据">白模数据</option>
+                <option value="点云数据">点云数据</option>
+              </select>
+            </div>
+            <div class="sel">
+              <select id="pb-status">
+                <option value="">请选择使用状态</option>
+                <option>启用</option>
+                <option>禁用</option>
+              </select>
+            </div>
+            <div class="inp">
+              <svg class="glass" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="6"/><path d="M13 13l4.5 4.5"/></svg>
+              <input type="text" id="pb-kw" placeholder="请输入服务名称/发布人">
+            </div>
+            <button class="btn btn-primary" id="pb-search">搜索</button>
+            <button class="btn btn-plain" id="pb-reset">重置</button>
+            <div class="spacer"></div>
+            <button class="btn btn-primary" id="pb-new">＋ 新增服务</button>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:14px;">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:42px;"><input type="checkbox" class="cb" id="pb-all"></th>
+                  <th style="width:180px;">服务名称</th>
+                  <th style="width:120px;">数据类型</th>
+                  <th style="width:110px;">数据格式</th>
+                  <th style="width:150px;">服务格式</th>
+                  <th style="width:80px;">服务地址</th>
+                  <th style="width:100px;">发布人</th>
+                  <th style="width:120px;">使用状态</th>
+                  <th style="width:140px;" class="th-filter" id="pb-f-update">更新状态<svg class="funnel" viewBox="0 0 16 16"><path d="M2 3h12l-4.6 5.6V14L6.6 12.4V8.6z"/></svg></th>
+                  <th style="width:120px;">切片状态</th>
+                  <th style="width:170px;" class="sortable" id="pb-sort-time">发布时间<span class="arrows"><i></i><i></i></span></th>
+                  <th style="width:160px;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="pb-tbody"></tbody>
+            </table>
+          </div>
+          <div class="batch-bar hidden" id="pb-batch">
+            <span>已选择 <b id="pb-count">0</b> 项</span>
+            <button class="btn" id="pb-batch-del" style="color:var(--danger);border-color:#f3c9ca;">批量删除</button>
+            <button class="btn btn-plain" id="pb-batch-on">批量启用</button>
+            <button class="btn btn-plain" id="pb-batch-off">批量禁用</button>
+          </div>
+          <div class="pager" id="pb-pager"></div>
+        </div>
+      </section>
+
+      <!-- ================= 图层配置 ================= -->
+      <section class="page hidden" id="page-layer">
+        <div class="page-head">
+          <div class="page-title">图层配置</div>
+          <div class="page-desc" style="margin-left:12px;">先在左侧建目录，再把右侧已发布服务挂到目录下，供三维渲染引擎按图层加载</div>
+          <div class="spacer"></div>
+          <button class="btn btn-primary" id="lay-save">保存配置</button>
+        </div>
+
+        <div class="card">
+          <div class="lay-filter">
+            <div class="inp">
+              <svg class="glass" viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="6"/><path d="M13 13l4.5 4.5"/></svg>
+              <input type="text" id="lay-kw" placeholder="搜索服务名称">
+            </div>
+            <div class="fld"><span>服务类型</span>
+              <div class="sel">
+                <select id="lay-type">
+                  <option value="">请选择服务类型</option>
+                  <option value="矢量数据">矢量数据</option>
+                  <option value="栅格数据">栅格数据（DOM）</option>
+                  <option value="地形数据">地形数据（DEM）</option>
+                  <option value="倾斜模型数据">倾斜模型数据</option>
+                  <option value="白模数据">白模数据</option>
+                  <option value="点云数据">点云数据</option>
+                </select>
+              </div>
+            </div>
+            <button class="btn btn-primary" id="lay-search">搜索</button>
+            <button class="btn btn-plain" id="lay-sreset">重置</button>
+          </div>
+        </div>
+
+        <div class="layer-grid" style="margin-top:14px;">
+          <!-- 左：目录树 -->
+          <div class="card tree-panel">
+            <button class="add-dir" id="lay-addgroup">＋ 新增目录</button>
+            <div class="tree-root">
+              <span class="caret open" id="lay-rootcaret">▶</span>
+              <svg class="tico folder" viewBox="0 0 20 20"><path d="M2 5.5c0-.83.67-1.5 1.5-1.5h3.7l1.6 1.8h7.2c.83 0 1.5.67 1.5 1.5v7.2c0 .83-.67 1.5-1.5 1.5H3.5c-.83 0-1.5-.67-1.5-1.5z"/></svg>
+              <span>根目录</span>
+            </div>
+            <div class="tree" id="lay-tree"></div>
+          </div>
+
+          <!-- 右：已发布服务列表 -->
+          <div class="card">
+            <div class="table-wrap">
+              <table class="svc-table">
+                <thead>
+                  <tr>
+                    <th style="width:48px;"><input type="checkbox" class="cb" id="lay-all"></th>
+                    <th style="width:210px;">服务名称</th>
+                    <th style="width:140px;">服务类型</th>
+                    <th style="width:100px;">服务格式</th>
+                    <th style="width:260px;">服务地址</th>
+                    <th style="width:96px;">默认打开</th>
+                    <th style="width:130px;">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="lay-tbody"></tbody>
+              </table>
+            </div>
+            <div class="batch-bar hidden" id="lay-batch">
+              <span>已选择 <b id="lay-count">0</b> 项</span>
+              <span class="lay-tip" id="lay-tip"></span>
+              <div class="spacer"></div>
+              <button class="btn btn-primary" id="lay-apply">勾选放入目录</button>
+            </div>
+            <div class="pager" id="lay-pager"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<div class="overlay" id="overlay"><div class="dialog" id="dialog"></div></div>
+
+<script>
+/* ============ 基础工具 ============ */
+const TYPE_FORMATS = {
+  '矢量数据':    ['SHP','GeoJSON','DWG','KML'],
+  '栅格数据':    ['GeoTIFF'],
+  '地形数据':    ['GeoTIFF'],
+  '倾斜模型数据':['OSGB'],
+  '白模数据':    ['SHP'],
+  '点云数据':    ['LAS','LAZ']
+};
+/* 数组首项即该数据类型的默认格式 */
+const TYPE_FORMAT = {};
+Object.keys(TYPE_FORMATS).forEach(t => { TYPE_FORMAT[t] = TYPE_FORMATS[t][0]; });
+/* 类型补充标识（表头/列表展示用） */
+const TYPE_SUB = {'栅格数据':'DOM','地形数据':'DEM'};
+const typeLabel = t => t + (TYPE_SUB[t] ? '（' + TYPE_SUB[t] + '）' : '');
+const typeOpts = sel => Object.keys(TYPE_FORMATS).map(t =>
+  '<option value="' + t + '"' + (t === sel ? ' selected' : '') + '>' + typeLabel(t) + '</option>').join('');
+/* 文件扩展名 → 数据格式 */
+const EXT_FORMAT = {
+  shp:'SHP', shx:'SHP', dbf:'SHP', prj:'SHP', cpg:'SHP',
+  geojson:'GeoJSON', json:'GeoJSON',
+  dwg:'DWG', dxf:'DWG', kml:'KML', kmz:'KML',
+  tif:'GeoTIFF', tiff:'GeoTIFF',
+  osgb:'OSGB',
+  las:'LAS', laz:'LAZ'
+};
+/* 数据格式 → 可用数据类型（多对多，如 SHP 可属矢量数据/白模数据） */
+const FORMAT_TYPE = {};
+Object.keys(TYPE_FORMATS).forEach(t => TYPE_FORMATS[t].forEach(f => {
+  (FORMAT_TYPE[f] = FORMAT_TYPE[f] || []).push(t);
+}));
+/* 压缩包扩展名：无法直接读取内部格式 */
+const EXT_ARCHIVE = ['zip','tar','gz','tgz','7z','rar'];
+/* 服务格式：发布时按数据类型可选的格式 */
+const SERVICE_FORMATS = {
+  '矢量数据':    ['MVT','WMS','WFS'],
+  '栅格数据':    ['WMS','WMTS'],
+  '地形数据':    ['Terrain'],
+  '倾斜模型数据':['3DTiles'],
+  '白模数据':    ['3DTiles'],
+  '点云数据':    ['3DTiles']
+};
+/* 发布 / 新增服务弹窗里「服务格式」的默认勾选：
+   矢量数据 → MVT / WMS / WFS 全选；栅格数据 → 仅默认 WMS（WMTS 可选）；
+   地形数据 → Terrain；倾斜模型 / 白模 / 点云数据 → 3DTiles */
+const SERVICE_FORMAT_DEFAULT = {
+  '矢量数据':    ['MVT','WMS','WFS'],
+  '栅格数据':    ['WMS'],
+  '地形数据':    ['Terrain'],
+  '倾斜模型数据':['3DTiles'],
+  '白模数据':    ['3DTiles'],
+  '点云数据':    ['3DTiles']
+};
+const defaultFormats = t => (SERVICE_FORMAT_DEFAULT[t] || SERVICE_FORMATS[t] || []).slice();
+/* 服务格式 → 发布协议说明 */
+const SERVICE_PROTOCOL = {
+  'MVT':'OGC MVT 矢量瓦片服务',
+  'WMS':'OGC WMS 地图服务',
+  'WFS':'OGC WFS 要素服务',
+  'WMTS':'OGC WMTS 瓦片地图服务',
+  'TMS':'TMS 瓦片地图服务',
+  'Terrain':'Terrain-RGB 地形服务',
+  '3DTiles':'3D Tiles 1.0 三维服务'
+};
+/* 服务格式 → 服务地址前缀 */
+const SERVICE_PATH = {
+  'MVT':'mvt','WMS':'wms','WFS':'wfs','WMTS':'wmts','TMS':'tms','Terrain':'terrain','3DTiles':'3dtiles'
+};
+/* 服务格式下拉项（多选由 mselHTML / bindMsel 提供） */
+const $ = s => document.querySelector(s);
+const $$ = s => Array.from(document.querySelectorAll(s));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+let seq = 1000;
+const nid = () => 'ID' + (++seq);
+
+function toast(msg, type){
+  const el = document.createElement('div');
+  el.className = 'toast' + (type ? ' ' + type : '');
+  el.innerHTML = '<span class="d"></span>' + esc(msg);
+  $('#toasts').appendChild(el);
+  setTimeout(() => { el.style.transition='all .25s'; el.style.opacity='0'; el.style.transform='translateY(-8px)'; }, 2200);
+  setTimeout(() => el.remove(), 2500);
+}
+
+/* 点击其他区域时，收起已打开的气泡（格式说明 / 多选下拉） */
+document.addEventListener('click', e => {
+  $$('.fmt-pop').forEach(p => { if (!p.contains(e.target)) p.classList.add('hidden'); });
+  $$('.msel').forEach(ms => {
+    const pop = ms.querySelector('.msel-pop');
+    if (pop && !ms.contains(e.target)){ pop.classList.add('hidden'); ms.classList.remove('open'); }
+  });
+});
+
+/* ============ 数据 ============ */
+let resources = [
+  {id:nid(), name:'20230131test1111',   type:'地形数据',    format:'GeoTIFF', size:'0',       uploader:'脆皮', time:'2023-01-31 09:36:14', status:'数据上传成功', progress:100, source:'服务器目录', path:'/data/lowair/dem/20230131', published:true},
+  {id:nid(), name:'202301301613_test',  type:'栅格数据',    format:'GeoTIFF', size:'2.8GB',   uploader:'脆皮', time:'2023-01-30 16:28:06', status:'数据上传成功', progress:100, source:'服务器目录', path:'/data/lowair/dom/20230130', published:false},
+  {id:nid(), name:'202301301559_test',  type:'栅格数据',    format:'GeoTIFF', size:'4.8GB',   uploader:'脆皮', time:'2023-01-29 15:51:27', status:'数据上传成功', progress:100, source:'本地上传', path:'202301301559_test.tif', published:false},
+  {id:nid(), name:'塔中管线矢量',        type:'矢量数据',    format:'SHP',     size:'86.2MB',  uploader:'脆皮', time:'2023-01-15 13:56:09', status:'数据上传成功', progress:100, source:'本地上传', path:'塔中管线矢量.shp', published:false},
+  {id:nid(), name:'1227管线',            type:'白模数据',    format:'SHP',     size:'124.4MB', uploader:'脆皮', time:'2022-12-27 17:48:48', status:'数据上传成功', progress:100, source:'本地上传', path:'1227管线.shp', published:false},
+  {id:nid(), name:'0302test_倾斜模型',  type:'倾斜模型数据', format:'OSGB',    size:'15.6GB',  uploader:'脆皮', time:'2023-03-02 10:12:33', status:'数据上传中',   progress:62,  source:'服务器目录', path:'/data/osgb/0302test', published:false},
+  {id:nid(), name:'0305_点云_scan',     type:'点云数据',    format:'LAS',     size:'8.4GB',   uploader:'脆皮', time:'2023-03-05 11:20:08', status:'数据上传中',   progress:35,  source:'本地上传', path:'0305_点云_scan.las', published:false},
+  {id:nid(), name:'DEM_cut_0301',       type:'地形数据',    format:'GeoTIFF', size:'3.2GB',   uploader:'脆皮', time:'2023-03-01 14:05:21', status:'数据上传失败', progress:0,   source:'本地上传', path:'DEM_cut_0301.tif', published:false}
+];
+
+const SV = [
+  ['2.3GTIF','栅格数据','WMTS','数字港湾测试','2023-02-02 09:18:53'],
+  ['土方计算第三批','倾斜模型数据','3DTiles','超级管理员','2023-02-01 09:18:35'],
+  ['土方计算第一批','倾斜模型数据','3DTiles','超级管理员','2023-02-01 09:18:34'],
+  ['2222','栅格数据','WMS','超级管理员','2023-01-28 17:52:31'],
+  ['000','地形数据','Terrain','超级管理员','2023-01-28 14:40:59'],
+  ['一期','倾斜模型数据','3DTiles','超级管理员','2023-01-28 14:40:30'],
+  ['塔中管线矢量','矢量数据','MVT','超级管理员','2023-01-15 13:56:09'],
+  ['DOM\\小范围','栅格数据','WMTS','超级管理员','2023-01-15 13:56:07'],
+  ['塔中管线模型','倾斜模型数据','3DTiles','超级管理员','2023-01-15 13:56:06'],
+  ['塔中卫片\\DEM','地形数据','Terrain','超级管理员','2023-01-15 13:44:36']
+];
+let services = SV.map((v,i) => ({
+  id:nid(), name:v[0], type:v[1], format:v[2], dataFormat:TYPE_FORMAT[v[1]],
+  publisher:v[3], time:v[4], status:'启用',
+  mapStatus: i % 3 === 1 ? '未添加到地图' : '已添加到地图',
+  tileStatus: (i === 2 || i === 6) ? '切片中' : ''
+}));
+/* 生成更多演示数据，凑满 68 条以还原分页效果 */
+(function(){
+  const types = ['栅格数据','倾斜模型数据','地形数据','矢量数据','白模数据','点云数据'];
+  const who = ['超级管理员','数字港湾测试','前宇'];
+  for (let i = services.length; i < 68; i++){
+    const t = types[i % types.length];
+    const d = new Date(2023, 0, 15, 13, 40, 0);
+    d.setMinutes(d.getMinutes() - i * 137);
+    const p = n => String(n).padStart(2,'0');
+    services.push({
+      id: nid(),
+      name: '低空数据服务_' + String(i + 1).padStart(3,'0'),
+      type: t,
+      format: SERVICE_FORMATS[t][i % SERVICE_FORMATS[t].length],
+      dataFormat: TYPE_FORMATS[t][i % TYPE_FORMATS[t].length],
+      publisher: who[i % who.length],
+      time: d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()),
+      status: i % 9 === 0 ? '禁用' : '启用',
+      mapStatus: i % 3 === 0 ? '未添加到地图' : '已添加到地图',
+      tileStatus: i % 7 === 0 ? '切片中' : ''
+    });
+  }
+})();
+/* 更新状态枚举 */
+const MAP_STATUS = ['已添加到地图','未添加到地图'];
+/* 切片状态：无状态显示短横「-」，切片中显示橙色标签 */
+const tileCell = v => v === '切片中'
+  ? '<span class="tag tag-run">切片中</span>'
+  : '<span class="dash">-</span>';
+
+/* ============ 通用渲染 ============ */
+function renderPager(el, st, total, onJump, onSize){
+  const pages = Math.max(1, Math.ceil(total / st.pageSize));
+  if (st.page > pages) st.page = pages;
+  let btns = '';
+  const add = p => { btns += '<button class="pg' + (p===st.page?' active':'') + '" data-p="'+p+'">'+p+'</button>'; };
+  if (pages <= 7){
+    for (let i=1;i<=pages;i++) add(i);
+  } else {
+    add(1);
+    let s = Math.max(2, st.page - 2), e = Math.min(pages - 1, s + 4);
+    s = Math.max(2, e - 4);
+    if (s > 2) btns += '<span class="gap">…</span>';
+    for (let i=s;i<=e;i++) add(i);
+    if (e < pages - 1) btns += '<span class="gap">…</span>';
+    add(pages);
+  }
+  el.innerHTML =
+    '<span class="total">共 ' + total + ' 条</span>' +
+    '<button class="pg" data-p="' + (st.page-1) + '" ' + (st.page===1?'disabled':'') + '>‹</button>' +
+    btns +
+    '<button class="pg" data-p="' + (st.page+1) + '" ' + (st.page===pages?'disabled':'') + '>›</button>' +
+    '<div class="sel"><select>' + [10,20,50].map(n => '<option value="'+n+'"'+(n===st.pageSize?' selected':'')+'>'+n+'条/页</option>').join('') + '</select></div>';
+  el.querySelectorAll('button[data-p]').forEach(b => b.onclick = () => {
+    const p = Number(b.dataset.p);
+    if (p >= 1 && p <= pages && p !== st.page) { st.page = p; onJump(); }
+  });
+  el.querySelector('select').onchange = e => { st.pageSize = Number(e.target.value); st.page = 1; onSize(); };
+}
+
+/* ============ 数据上传 ============ */
+const up = {page:1, pageSize:10, type:'', status:'', kw:'', order:'desc'};
+
+function upList(){
+  let arr = resources.filter(r =>
+    (!up.type || r.type === up.type) &&
+    (!up.status || r.status === up.status) &&
+    (!up.kw || r.name.toLowerCase().includes(up.kw.toLowerCase()) || r.uploader.toLowerCase().includes(up.kw.toLowerCase()))
+  );
+  arr.sort((a,b) => up.order === 'desc' ? b.time.localeCompare(a.time) : a.time.localeCompare(b.time));
+  return arr;
+}
+function upRender(){
+  const all = upList();
+  const st = (up.page - 1) * up.pageSize;
+  const rows = all.slice(st, st + up.pageSize);
+  $('#up-tbody').innerHTML = rows.length ? rows.map(r => {
+    const cls = r.status === '数据上传成功' ? 's-ok' : r.status === '数据上传失败' ? 's-err' : 's-run';
+    const canPub = r.status === '数据上传成功';
+    const uploading = r.status === '数据上传中';
+    const pg = Math.max(0, Math.min(100, Number(r.progress) || 0));
+    const statusCell = uploading
+      ? '<span class="status s-run"><span class="d"></span>数据上传中 ' + pg + '%</span>' +
+        '<div class="pbar"><i style="width:' + pg + '%"></i></div>'
+      : '<span class="status ' + cls + '"><span class="d"></span>' + esc(r.status) + '</span>';
+    return '<tr data-id="' + r.id + '">' +
+      '<td class="name">' + esc(r.name) + '</td>' +
+      '<td>' + esc(typeLabel(r.type)) + '</td>' +
+      '<td>' + esc(r.format) + '</td>' +
+      '<td>' + esc(r.size) + '</td>' +
+      '<td>' + esc(r.uploader) + '</td>' +
+      '<td class="muted">' + esc(r.time) + '</td>' +
+      '<td>' + statusCell + '</td>' +
+      '<td>' +
+        '<button class="op-link" data-act="edit">编辑</button><span class="op-sep">|</span>' +
+        '<button class="op-link" data-act="detail">详情</button><span class="op-sep">|</span>' +
+        (canPub
+          ? '<button class="op-link" data-act="pub">' + (r.published ? '重新发布' : '发布') + '</button>'
+          : '<span class="op-link op-dis">发布</span>') +
+        '<span class="op-sep">|</span><button class="op-link op-del" data-act="del">删除</button>' +
+      '</td></tr>';
+  }).join('') : '<tr><td colspan="8" style="text-align:center;color:#98a2b3;padding:44px 0;">暂无数据</td></tr>';
+
+  $('#up-tbody').querySelectorAll('button[data-act]').forEach(b => {
+    const id = b.closest('tr').dataset.id;
+    b.onclick = () => {
+      const a = b.dataset.act;
+      if (a === 'edit') openEditResource(id);
+      else if (a === 'detail') openDetailResource(id);
+      else if (a === 'pub') openPublish(id);
+      else confirmDel('resource', id);
+    };
+  });
+  $('#up-sort-time').className = 'sortable ' + up.order;
+  renderPager($('#up-pager'), up, all.length, upRender, upRender);
+}
+$('#up-sort-time').onclick = () => { up.order = up.order === 'desc' ? 'asc' : 'desc'; upRender(); };
+$('#up-search').onclick = () => { up.type = $('#up-type').value; up.status = $('#up-status').value; up.kw = $('#up-kw').value.trim(); up.page = 1; upRender(); };
+$('#up-kw').onkeydown = e => { if (e.key === 'Enter') $('#up-search').click(); };
+$('#up-reset').onclick = () => { $('#up-type').value=''; $('#up-status').value=''; $('#up-kw').value=''; up.type=up.status=up.kw=''; up.page=1; upRender(); };
+$('#up-new').onclick = openUpload;
+
+/* ============ 数据发布服务 ============ */
+const pb = {page:1, pageSize:10, type:'', status:'', kw:'', map:'', order:'desc'};
+let picked = new Set();
+
+function pbList(){
+  let arr = services.filter(s =>
+    (!pb.type || s.type === pb.type) &&
+    (!pb.status || s.status === pb.status) &&
+    (!pb.map || s.mapStatus === pb.map) &&
+    (!pb.kw || s.name.toLowerCase().includes(pb.kw.toLowerCase()) || s.publisher.toLowerCase().includes(pb.kw.toLowerCase()))
+  );
+  arr.sort((a,b) => pb.order === 'desc' ? b.time.localeCompare(a.time) : a.time.localeCompare(b.time));
+  return arr;
+}
+/* 多选下拉：服务格式（可多选） */
+function mselHTML(id, items, sel){
+  const cur = sel || [];
+  const tags = cur.map(f => '<span class="msel-tag" data-v="' + f + '">' + f +
+    '<i data-x="' + f + '">×</i></span>').join('');
+  return '<div class="msel" id="' + id + '">' +
+    '<div class="msel-box" id="' + id + '-box">' +
+      (cur.length ? tags : '<span class="msel-ph">请选择服务格式（可多选）</span>') +
+    '</div>' +
+    '<div class="msel-pop hidden" id="' + id + '-pop">' +
+      items.map(f => '<label class="' + (cur.indexOf(f) >= 0 ? 'on' : '') + '" data-v="' + f + '">' +
+        '<input type="checkbox" class="cb"' + (cur.indexOf(f) >= 0 ? ' checked' : '') + '>' + f + '</label>').join('') +
+    '</div>' +
+  '</div>';
+}
+/* 绑定多选下拉；onChange(values) 在每次变化时回调，values 按选项原始顺序 */
+function bindMsel(id, onChange){
+  const root = $('#' + id), box = $('#' + id + '-box'), pop = $('#' + id + '-pop');
+  const allVals = Array.from(pop.querySelectorAll('label')).map(l => l.dataset.v);
+  const get = () => allVals.filter(f => root.querySelector('.msel-tag[data-v="' + f + '"]'));
+  function paint(){
+    const cur = get();
+    box.innerHTML = cur.length
+      ? cur.map(f => '<span class="msel-tag" data-v="' + f + '">' + f + '<i data-x="' + f + '">×</i></span>').join('')
+      : '<span class="msel-ph">请选择服务格式（可多选）</span>';
+    pop.querySelectorAll('label').forEach(l => {
+      const on = cur.indexOf(l.dataset.v) >= 0;
+      l.classList.toggle('on', on);
+      l.querySelector('input').checked = on;
+    });
+    box.querySelectorAll('.msel-tag i[data-x]').forEach(x => x.onclick = e => {
+      e.stopPropagation();
+      set(allVals.filter(f => f !== x.dataset.x));
+    });
+    if (onChange) onChange(cur);
+  }
+  function set(vals){
+    box.innerHTML = vals.length
+      ? vals.map(f => '<span class="msel-tag" data-v="' + f + '">' + f + '<i data-x="' + f + '">×</i></span>').join('')
+      : '<span class="msel-ph">请选择服务格式（可多选）</span>';
+    paint();
+  }
+  function toggle(v){
+    const cur = get();
+    set(cur.indexOf(v) >= 0 ? cur.filter(f => f !== v) : allVals.filter(f => cur.indexOf(f) >= 0 || f === v));
+  }
+  box.onclick = e => {
+    if (e.target.closest('.msel-tag')) return;
+    root.classList.toggle('open');
+    pop.classList.toggle('hidden');
+  };
+  pop.querySelectorAll('label').forEach(l => l.onclick = e => { e.preventDefault(); toggle(l.dataset.v); });
+  paint();
+  return { get };
+}
+const svcUrl = s => s.addr || ('/api/services/' + (SERVICE_PATH[s.format] || 'svc') + '/' + s.id.slice(-6));
+
+/* 复制服务地址：按钮短暂变为“已复制” */
+function copySvcUrl(btn, id){
+  const s = services.find(x => x.id === id);
+  if (!s) return;
+  const url = svcUrl(s);
+  const done = () => {
+    btn.textContent = '已复制';
+    btn.classList.add('done');
+    toast('服务地址已复制：' + url);
+    setTimeout(() => { btn.textContent = '复制'; btn.classList.remove('done'); }, 1600);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(url).then(done, done);
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = url; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    ta.remove(); done();
+  }
+}
+
+function pbRender(){
+  const all = pbList();
+  const st = (pb.page - 1) * pb.pageSize;
+  const rows = all.slice(st, st + pb.pageSize);
+  $('#pb-tbody').innerHTML = rows.length ? rows.map(s => {
+    const on = s.status === '启用';
+    /* 切片中的服务尚不符可预览条件，预览入口置灰 */
+    const canView = s.tileStatus !== '切片中';
+    return '<tr data-id="' + s.id + '" class="' + (picked.has(s.id) ? 'sel-row' : '') + '">' +
+      '<td><input type="checkbox" class="cb" data-role="row"' + (picked.has(s.id) ? ' checked' : '') + '></td>' +
+      '<td class="name">' + esc(s.name) + '</td>' +
+      '<td>' + esc(typeLabel(s.type)) + '</td>' +
+      '<td>' + esc(s.dataFormat || TYPE_FORMAT[s.type] || '') + '</td>' +
+      '<td>' + esc(fmtText(s)) + '</td>' +
+      '<td><div class="addr"><button class="cp" data-act="copy" title="' + esc(svcUrl(s)) + '">复制</button></div></td>' +
+      '<td>' + esc(s.publisher) + '</td>' +
+      '<td>' +
+        '<div class="sw-wrap ' + (on ? 'on' : '') + '" data-act="toggle" data-id="' + s.id + '" ' +
+          'title="点击' + (on ? '禁用' : '启用') + '该服务">' +
+          '<span class="sw"></span><span class="sw-txt">' + esc(s.status) + '</span>' +
+        '</div>' +
+      '</td>' +
+      '<td>' + (s.mapStatus === '已添加到地图'
+        ? '<span class="tag tag-ok">已添加到地图</span>'
+        : '<span class="tag tag-no">未添加到地图</span>') + '</td>' +
+      '<td>' + tileCell(s.tileStatus) + '</td>' +
+      '<td class="muted">' + esc(s.time) + '</td>' +
+      '<td>' +
+        '<button class="op-link" data-act="detail">详情</button><span class="op-sep">|</span>' +
+        '<button class="op-link" data-act="del">删除</button><span class="op-sep">|</span>' +
+        (canView
+          ? '<button class="op-link" data-act="view">预览</button>'
+          : '<span class="op-link op-dis" title="切片完成后才可预览">预览</span>') +
+      '</td></tr>';
+  }).join('') : '<tr><td colspan="12" style="text-align:center;color:#98a2b3;padding:44px 0;">暂无数据</td></tr>';
+
+  $('#pb-tbody').querySelectorAll('tr').forEach(tr => {
+    const id = tr.dataset.id;
+    const cb = tr.querySelector('input[data-role=row]');
+    cb.onchange = () => { cb.checked ? picked.add(id) : picked.delete(id); syncPicked(); };
+    tr.querySelectorAll('button[data-act]').forEach(b => {
+      b.onclick = () => {
+        const a = b.dataset.act;
+        if (a === 'del') confirmDel('service', id);
+        else if (a === 'copy') copySvcUrl(b, id);
+        else if (a === 'detail') openDetailService(id);
+        else openPreview(id);
+      };
+    });
+    /* 使用状态开关：点一下即切换 启用 / 禁用（仅切换该行，不刷新整页） */
+    const sw = tr.querySelector('.sw-wrap[data-act="toggle"]');
+    if (sw) sw.onclick = () => {
+      const s = services.find(x => x.id === id);
+      if (!s) return;
+      s.status = s.status === '启用' ? '禁用' : '启用';
+      const on = s.status === '启用';
+      sw.classList.toggle('on', on);
+      sw.title = '点击' + (on ? '禁用' : '启用') + '该服务';
+      sw.querySelector('.sw-txt').textContent = s.status;
+      toast('服务「' + s.name + '」已' + s.status);
+      /* 若正处于使用状态筛选下，切换后重新渲染，避免出现不符合筛选条件的行 */
+      if (pb.status) pbRender();
+    };
+  });
+  const ids = rows.map(r => r.id);
+  const allSel = ids.length > 0 && ids.every(i => picked.has(i));
+  const partSel = ids.some(i => picked.has(i));
+  $('#pb-all').checked = allSel;
+  $('#pb-all').indeterminate = !allSel && partSel;
+  $('#pb-sort-time').className = 'sortable ' + pb.order;
+  $('#pb-f-update').className = 'th-filter' + (pb.map ? ' on' : '');
+  renderPager($('#pb-pager'), pb, all.length, pbRender, pbRender);
+}
+function syncPicked(){
+  $('#pb-count').textContent = picked.size;
+  $('#pb-batch').classList.toggle('hidden', picked.size === 0);
+  pbRender();
+}
+$('#pb-all').onchange = function(){
+  const all = pbList();
+  const st = (pb.page - 1) * pb.pageSize;
+  all.slice(st, st + pb.pageSize).forEach(s => this.checked ? picked.add(s.id) : picked.delete(s.id));
+  syncPicked();
+};
+$('#pb-batch-del').onclick = () => {
+  if (!picked.size) return;
+  openDialog('批量删除服务', '<div style="font-size:13.5px;color:#3c4b60;line-height:1.8;">确认删除已选中的 <b style="color:#e5484d;">' + picked.size + '</b> 个数据服务？<div class="hint">删除后服务将立即停止访问。</div></div>',
+    [['取消','btn-plain'],['确认删除','btn-primary']], ok => {
+      if (!ok) return;
+      services = services.filter(s => !picked.has(s.id));
+      const n = picked.size; picked.clear(); syncPicked();
+      toast('已删除 ' + n + ' 个服务');
+    });
+};
+$('#pb-batch-off').onclick = () => {
+  if (!picked.size) return;
+  services.forEach(s => { if (picked.has(s.id)) s.status = '禁用'; });
+  toast('已禁用 ' + picked.size + ' 个服务', 'warn'); picked.clear(); syncPicked();
+};
+$('#pb-batch-on').onclick = () => {
+  if (!picked.size) return;
+  services.forEach(s => { if (picked.has(s.id)) s.status = '启用'; });
+  toast('已启用 ' + picked.size + ' 个服务'); picked.clear(); syncPicked();
+};
+$('#pb-sort-time').onclick = () => { pb.order = pb.order === 'desc' ? 'asc' : 'desc'; pbRender(); };
+$('#pb-search').onclick = () => { pb.type = $('#pb-type').value; pb.status = $('#pb-status').value; pb.kw = $('#pb-kw').value.trim(); pb.page = 1; pbRender(); };
+$('#pb-kw').onkeydown = e => { if (e.key === 'Enter') $('#pb-search').click(); };
+$('#pb-reset').onclick = () => { $('#pb-type').value=''; $('#pb-status').value=''; $('#pb-kw').value=''; pb.type=pb.status=pb.kw=pb.map=''; pb.page=1; pbRender(); };
+$('#pb-new').onclick = openAddService;
+
+/* 更新状态表头漏斗：点开筛选面板（已添加到地图 / 未添加到地图 / 全部） */
+$('#pb-f-update').onclick = e => {
+  e.stopPropagation();
+  const open = document.getElementById('pb-map-pop');
+  if (open){ open.remove(); return; }
+  const th = $('#pb-f-update');
+  const items = [['', '全部']].concat(MAP_STATUS.map(v => [v, v]));
+  const pop = document.createElement('div');
+  pop.className = 'th-pop';
+  pop.id = 'pb-map-pop';
+  pop.innerHTML = items.map(it =>
+    '<div class="th-pop-item' + (pb.map === it[0] ? ' on' : '') + '" data-v="' + it[0] + '">' + it[1] + '</div>').join('');
+  document.body.appendChild(pop);
+  /* 定位到表头下方左对齐 */
+  const r = th.getBoundingClientRect();
+  pop.style.top = (r.bottom + 4) + 'px';
+  pop.style.left = r.left + 'px';
+  pop.querySelectorAll('.th-pop-item').forEach(el => el.onclick = ev => {
+    ev.stopPropagation();
+    pb.map = el.dataset.v; pb.page = 1;
+    pop.remove();
+    pbRender();
+  });
+};
+/* 点击其他区域收起筛选面板 */
+document.addEventListener('click', () => {
+  const p = document.getElementById('pb-map-pop');
+  if (p) p.remove();
+});
+
+/* ============ 弹窗框架 ============ */
+let dlgOk = null;
+function openDialog(title, body, buttons, cb, wide, alignRight, area){
+  dlgOk = cb;
+  const d = $('#dialog');
+  d.className = 'dialog' + (wide ? ' wide' : '');
+  const ov = $('#overlay');
+  ov.classList.toggle('right', !!alignRight);
+  ov.classList.toggle('area', !!area);
+  d.innerHTML =
+    '<div class="dlg-head"><h3>' + title + '</h3><button class="dlg-close">×</button></div>' +
+    '<div class="dlg-body">' + body + '</div>' +
+    '<div class="dlg-foot">' +
+      buttons.map((b,i) => '<button class="btn ' + b[1] + '" data-i="' + i + '">' + b[0] + '</button>').join('') +
+    '</div>';
+  d.querySelector('.dlg-close').onclick = () => closeDialog();
+  d.querySelectorAll('.dlg-foot button').forEach(b => b.onclick = () => {
+    const ok = dlgOk ? dlgOk(Number(b.dataset.i)) : true;
+    if (ok !== false) closeDialog();
+  });
+  $('#overlay').classList.add('show');
+}
+function closeDialog(){ $('#overlay').classList.remove('show'); dlgOk = null; }
+$('#overlay').onclick = e => { if (e.target.id === 'overlay') closeDialog(); };
+
+/* 删除确认 */
+function confirmDel(kind, id){
+  const isR = kind === 'resource';
+  const item = isR ? resources.find(x => x.id === id) : services.find(x => x.id === id);
+  const tip = isR
+    ? '删除后数据文件与切片成果将被清理，且不影响已发布的服务。'
+    : '删除后服务将立即停止访问。';
+  openDialog(isR ? '删除数据' : '删除服务',
+    '<div style="font-size:13.5px;color:#3c4b60;line-height:1.8;">确认删除 <b>' + esc(item.name) + '</b>？<div class="hint">' + tip + '</div></div>',
+    [['取消','btn-plain'],['确认删除','btn-primary']], ok => {
+      if (!ok) return;
+      if (isR) resources = resources.filter(x => x.id !== id);
+      else services = services.filter(x => x.id !== id);
+      isR ? upRender() : pbRender();
+      toast('删除成功');
+    });
+}
+
+/* ============ 上传弹窗 ============ */
+function openUpload(){
+  /* 支持的数据格式说明：默认隐藏，点数据来源旁的“!”图标弹出 */
+  const fmtPop =
+    '<div class="fmt-pop hidden" id="f-fmt-pop">' +
+      '<div class="fmt-pop-head">支持的数据格式</div>' +
+      '<div class="fmt-box">' +
+        Object.keys(TYPE_FORMATS).map(t =>
+          '<div class="fmt-row"><span class="t">' + typeLabel(t) + '</span>' +
+          '<span class="f">' + TYPE_FORMATS[t].map(f => '<b>' + f + '</b>').join('') + '</span></div>'
+        ).join('') +
+      '</div>' +
+      '<div class="fmt-note">上传时平台会按文件扩展名自动读取数据格式（如 .shp → SHP、.tif → GeoTIFF、.las → LAS），并回填到列表的“数据格式”列。</div>' +
+    '</div>';
+
+  openDialog('上传数据',
+    '<div class="grid2">' +
+      '<div class="field"><label><span class="req">*</span>数据名称</label><input type="text" id="f-name" placeholder="如：20230131test1111"></div>' +
+      '<div class="field"><label><span class="req">*</span>数据类型</label><select id="f-type">' +
+        typeOpts() +
+      '</select></div>' +
+    '</div>' +
+    '<div class="field"><label><span class="req">*</span>数据来源<span class="fmt-trigger" id="f-fmt-btn" title="查看支持的数据格式">!</span></label>' +
+      fmtPop +
+      '<div class="src-row">' +
+        '<label class="rd"><input type="radio" name="f-src" value="local" checked><span>本地上传文件</span></label>' +
+        '<label class="rd"><input type="radio" name="f-src" value="dir"><span>服务器目录上传</span></label>' +
+      '</div>' +
+      '<div id="f-local">' +
+        '<div class="drop" id="f-drop"><div class="big"><b>点击选择</b> 或 将本地文件拖拽到此处</div>' +
+        '<div class="small">支持 SHP / GeoJSON / DWG / KML / GeoTIFF / OSGB / LAS / LAZ，单文件建议不超过 50GB</div></div>' +
+        '<input type="file" id="f-input" class="hidden" accept=".shp,.shx,.dbf,.prj,.geojson,.json,.dwg,.kml,.tif,.tiff,.osgb,.las,.laz,.zip,.tar,.gz,.7z">' +
+        '<div id="f-file"></div>' +
+      '</div>' +
+      '<div id="f-dir-box" class="hidden">' +
+        '<input type="text" id="f-dir" placeholder="如：/data/lowair/dataset/20230131 或 D:\\低空数据\\DEM">' +
+        '<div class="hint">填写服务器上已就绪的数据目录，提交后由平台从该目录读取数据。</div>' +
+      '</div>' +
+      '<div class="detect" id="f-detect">选择数据文件或填写目录后，系统将自动识别数据格式，并在列表中展示。</div>' +
+    '</div>' +
+    '<div class="field" style="margin-bottom:0;"><label>备注</label><textarea id="f-note" placeholder="选填，如数据范围、坐标系、密级等说明"></textarea>' +
+      '<div class="hint" id="f-tip"></div></div>',
+    [['取消','btn-plain'],['上传','btn-primary']], i => {
+      if (i !== 1) return true;
+      const name = $('#f-name').value.trim();
+      const src = document.querySelector('input[name="f-src"]:checked').value;
+      if (!name) { toast('请填写数据名称', 'err'); return false; }
+      if (src === 'local' && !localFile) { toast('请点击选择本地文件', 'err'); return false; }
+      if (src === 'dir' && !$('#f-dir').value.trim()) { toast('请填写服务器目录地址', 'err'); return false; }
+      const type = $('#f-type').value;
+      /* 按所选来源的文件名/目录路径读取数据格式 */
+      const raw = src === 'local' ? localFile.name : $('#f-dir').value.trim();
+      const det = detectFormat(raw);
+      const format = (det && det.fmt) ? det.fmt : TYPE_FORMAT[type];
+      const size = src === 'local'
+        ? humanSize(localFile.size)
+        : ['2.8GB','4.8GB','1.2GB','860MB','15.6GB','8.4GB'][Math.floor(Math.random()*6)];
+      const now = new Date();
+      const p = n => String(n).padStart(2,'0');
+      const time = now.getFullYear()+'-'+p(now.getMonth()+1)+'-'+p(now.getDate())+' '+p(now.getHours())+':'+p(now.getMinutes())+':'+p(now.getSeconds());
+      const rec = {
+        id:nid(), name, type, format, size, uploader:'脆皮', time,
+        status:'数据上传中', progress:0, published:false,
+        source: src === 'local' ? '本地上传' : '服务器目录',
+        path: raw,
+        note: $('#f-note').value.trim()
+      };
+      resources.unshift(rec);
+      up.page = 1; upRender();
+      toast(src === 'local' ? '数据已提交，分片上传中…' : '已提交服务器目录导入任务…', 'warn');
+      /* 模拟上传进度推进：0% → 100% 后转为上传成功 */
+      const timer = setInterval(() => {
+        rec.progress = Math.min(100, rec.progress + Math.floor(Math.random()*13) + 7);
+        if (rec.progress >= 100){
+          clearInterval(timer);
+          rec.progress = 100;
+          rec.status = '数据上传成功';
+          upRender();
+          toast('「' + name + '」（' + format + '）数据上传成功，可发布为服务');
+        } else {
+          upRender();
+        }
+      }, 700);
+      return true;
+    }, false, true);
+
+  /* ---------- 来源切换 / 校验 / 上传交互 ---------- */
+  const tip = $('#f-tip');
+  let localFile = null;
+
+  /* “!”图标：展开 / 收起支持的数据格式气泡 */
+  $('#f-fmt-btn').onclick = e => {
+    e.stopPropagation();
+    $('#f-fmt-pop').classList.toggle('hidden');
+  };
+
+  function humanSize(bytes){
+    if (!bytes) return '0';
+    const mb = bytes / 1024 / 1024;
+    return mb >= 1024 ? (mb / 1024).toFixed(2) + 'GB' : Math.max(0.1, mb).toFixed(1) + 'MB';
+  }
+  function curSrc(){ return document.querySelector('input[name="f-src"]:checked').value; }
+  function rawSource(){ return curSrc() === 'local' ? (localFile ? localFile.name : '') : $('#f-dir').value.trim(); }
+  /* 依据文件名 / 目录路径读取数据格式 */
+  function detectFormat(raw){
+    const n = String(raw || '').trim();
+    if (!n) return null;
+    const seg = n.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+    const parts = seg.split('.');
+    const ext = parts.length > 1 ? parts.pop().toLowerCase() : '';
+    if (!ext){
+      /* 目录地址：按目录名关键字兜底识别 */
+      const s = n.toLowerCase();
+      const KW = [['dom','GeoTIFF'],['dem','GeoTIFF'],['geotiff','GeoTIFF'],['osgb','OSGB'],
+                  ['las','LAS'],['laz','LAZ'],['shp','SHP'],['geojson','GeoJSON'],
+                  ['点云','LAS'],['倾斜','OSGB'],['白模','SHP']];
+      for (const kf of KW) if (s.includes(kf[0])) return {dir:true, ext:'', fmt:kf[1]};
+      return {dir:true, ext:'', fmt:''};
+    }
+    if (EXT_ARCHIVE.indexOf(ext) >= 0) return {ext, fmt:'', archive:true};
+    return {ext, fmt: EXT_FORMAT[ext] || ''};
+  }
+  /* 识别结果回显：自动匹配数据类型 + 确定入库数据格式 */
+  function syncFormat(autoType){
+    const box = $('#f-detect'), sel = $('#f-type');
+    const d = detectFormat(rawSource());
+    if (!d){
+      box.className = 'detect';
+      box.textContent = '选择数据文件或填写目录后，系统将自动识别数据格式，并在列表中展示。';
+      return;
+    }
+    if (d.fmt){
+      const cands = FORMAT_TYPE[d.fmt] || [];
+      if (autoType && cands.length && cands.indexOf(sel.value) < 0) sel.value = cands[0];
+      const matched = cands.indexOf(sel.value) >= 0;
+      const from = d.ext ? ('按文件扩展名 .' + d.ext + ' 识别') : '按目录名关键字识别';
+      box.className = 'detect ' + (matched ? 'ok' : 'warn');
+      box.innerHTML = '已读取数据格式：<b>' + esc(d.fmt) + '</b>（' + from + '）' +
+        (matched
+          ? '，与数据类型「' + esc(sel.value) + '」匹配。'
+          : '，与当前选择的数据类型「' + esc(sel.value) + '」不一致，入库格式将以识别到的 <b>' + esc(d.fmt) + '</b> 为准。');
+      return;
+    }
+    /* 压缩包 / 未知扩展名 / 无扩展名目录：按所选类型的默认格式登记 */
+    const def = TYPE_FORMAT[sel.value];
+    box.className = 'detect warn';
+    box.textContent = d.archive
+      ? '上传的是压缩包（.' + d.ext + '），无法直接读取内部格式，暂按数据类型「' + sel.value + '」的默认格式 ' + def + ' 登记。'
+      : (d.ext
+        ? '无法识别扩展名 .' + d.ext + '，暂按数据类型「' + sel.value + '」的默认格式 ' + def + ' 登记。'
+        : '当前为目录地址且未含扩展名，暂按数据类型「' + sel.value + '」的默认格式 ' + def + ' 登记。');
+  }
+  function refresh(autoType){
+    const dataOk = curSrc() === 'local' ? !!localFile : $('#f-dir').value.trim() !== '';
+    /* 「上传」按钮始终为可点击的蓝色实心态，校验只在提交时进行 */
+    if (dataOk){
+      tip.style.color = '#1fa463';
+      const dataTxt = curSrc() === 'local' ? ('本地文件 ' + localFile.name) : ('服务器目录 ' + $('#f-dir').value.trim());
+      tip.textContent = '数据来源已就绪（' + dataTxt + '），可点击“上传”。';
+    } else {
+      tip.textContent = '';
+    }
+    syncFormat(!!autoType);
+  }
+  function setLocalFile(f){
+    if (!f) return;
+    localFile = f;
+    $('#f-file').innerHTML =
+      '<div class="file-chip"><span class="nm">' + esc(f.name) + '</span><span>' + humanSize(f.size) + '</span>' +
+      '<span class="x" id="f-x">移除</span></div>' +
+      '<div class="bar"><i style="width:0%"></i></div>' +
+      '<div class="prog-txt"><span>待上传（支持断点续传）</span><span>0%</span></div>';
+    $('#f-x').onclick = ev => {
+      ev.stopPropagation();
+      localFile = null; $('#f-input').value = ''; $('#f-file').innerHTML = '';
+      refresh(true);
+    };
+    refresh(true);
+  }
+  $$('input[name="f-src"]').forEach(r => r.onchange = () => {
+    const isLocal = r.value === 'local';
+    $('#f-local').classList.toggle('hidden', !isLocal);
+    $('#f-dir-box').classList.toggle('hidden', isLocal);
+    /* 两种方式互斥：切换后清空另一种已填内容 */
+    if (isLocal){
+      $('#f-dir').value = '';
+    } else {
+      localFile = null; $('#f-input').value = ''; $('#f-file').innerHTML = '';
+    }
+    refresh(true);
+  });
+  $('#f-drop').onclick = () => $('#f-input').click();
+  $('#f-input').onchange = e => setLocalFile(e.target.files[0]);
+  const dz = $('#f-drop');
+  dz.ondragover = e => { e.preventDefault(); dz.style.borderColor = 'var(--primary)'; dz.style.background = '#f5f9ff'; };
+  dz.ondragleave = () => { dz.style.borderColor = ''; dz.style.background = ''; };
+  dz.ondrop = e => {
+    e.preventDefault();
+    dz.style.borderColor = ''; dz.style.background = '';
+    setLocalFile(e.dataTransfer.files[0]);
+  };
+  $('#f-name').oninput = () => refresh();
+  $('#f-dir').oninput = () => refresh(true);
+  $('#f-type').onchange = () => refresh();
+  refresh();
+}
+
+/* ============ 编辑数据弹窗（仅数据名称与备注可改） ============ */
+function openEditResource(rid){
+  const r = resources.find(x => x.id === rid);
+  if (!r) return;
+  openDialog('编辑数据',
+    '<div class="field"><label><span class="req">*</span>数据名称</label><input type="text" id="er-name" value="' + esc(r.name) + '"></div>' +
+    '<div class="grid2">' +
+      '<div class="field"><label>数据类型</label><input type="text" disabled value="' + esc(typeLabel(r.type)) + '"></div>' +
+      '<div class="field"><label>数据格式</label><input type="text" disabled value="' + esc(r.format) + '"></div>' +
+      '<div class="field"><label>数据大小</label><input type="text" disabled value="' + esc(r.size) + '"></div>' +
+      '<div class="field"><label>上传人</label><input type="text" disabled value="' + esc(r.uploader) + '"></div>' +
+      '<div class="field"><label>上传状态</label><input type="text" disabled value="' + esc(r.status) + '"></div>' +
+      '<div class="field"><label>上传时间</label><input type="text" disabled value="' + esc(r.time) + '"></div>' +
+    '</div>' +
+    '<div class="field"><label>数据来源</label><input type="text" disabled value="' + esc((r.source || '本地上传') + (r.path ? '（' + r.path + '）' : '')) + '"></div>' +
+    '<div class="field" style="margin-bottom:0;"><label>备注</label><textarea id="er-note" placeholder="选填，如数据范围、坐标系、密级等说明">' + esc(r.note || '') + '</textarea>' +
+      '<div class="hint">仅支持修改数据名称与备注；数据类型、格式、大小、上传人、上传状态、上传时间与数据来源由系统记录，不可修改。</div></div>',
+    [['取消','btn-plain'],['保存','btn-primary']], i => {
+      if (i !== 1) return true;
+      const name = $('#er-name').value.trim();
+      if (!name) { toast('请填写数据名称', 'err'); return false; }
+      r.name = name;
+      r.note = $('#er-note').value.trim();
+      upRender(); toast('保存成功');
+      return true;
+    }, false, true);
+}
+
+/* ============ 服务表单（发布 / 新增 共用） ============ */
+/* opt: {title, name, type, formats, addr, uid, hint, onOk}
+   字段：服务名称（手填）、数据类型（选择）、服务格式（多选）、服务地址（手填） */
+function serviceForm(opt){
+  const hint = opt.hint || '新增后按服务名称生成服务，服务地址可在“服务管理”列表中预览与复制。';
+  const avail = SERVICE_FORMATS[opt.type] || [];
+  const sels = (opt.formats || []).filter(f => avail.indexOf(f) >= 0);  openDialog(opt.title,
+    '<div class="grid2">' +
+      '<div class="field"><label><span class="req">*</span>服务名称</label>' +
+        '<input type="text" id="sv-name" value="' + esc(opt.name || '') + '" placeholder="如：DOM 正射影像服务"></div>' +
+      '<div class="field"><label><span class="req">*</span>数据类型</label><select id="sv-type">' +
+        typeOpts(opt.type) +
+      '</select></div>' +
+    '</div>' +
+    '<div class="field"><label><span class="req">*</span>服务格式（可多选）</label>' +
+      '<div id="sv-fmt-wrap">' + mselHTML('sv-fmt', avail, sels) + '</div>' +
+      '<div class="hint">' + hint + '</div></div>' +
+    '<div class="field"><label><span class="req">*</span>服务地址</label>' +
+      '<input type="text" id="sv-addr" value="' + esc(opt.addr || '') + '" placeholder="如：/api/services/wmts/ID1009">' +
+      '<div class="hint">地址前缀随所选服务格式自动匹配（以首个格式为准），也可手动修改。</div></div>' +
+    '<div class="field" style="margin-bottom:0;"><label>服务描述</label>' +
+      '<textarea id="sv-note" placeholder="选填，如数据范围、切片层级、使用方说明"></textarea></div>',
+    [['取消','btn-plain'],['确定','btn-primary']], i => {
+      if (i !== 1) return true;
+      const name = $('#sv-name').value.trim();
+      if (!name) { toast('请填写服务名称', 'err'); return false; }
+      const formats = fmtBox.get();
+      if (!formats.length) { toast('请至少选择一个服务格式', 'err'); return false; }
+      const addr = $('#sv-addr').value.trim();
+      if (!addr) { toast('请填写服务地址', 'err'); return false; }
+      opt.onOk({
+        name,
+        type: $('#sv-type').value,
+        formats,
+        addr,
+        note: $('#sv-note').value.trim()
+      });
+      return true;
+    }, false, true);
+
+  /* ---------- 服务地址与服务格式联动 ---------- */
+  const tSel = $('#sv-type'), aInp = $('#sv-addr');
+  const uid = opt.uid || 'ID0000';
+  const autoAddr = f => '/api/services/' + (SERVICE_PATH[f] || 'svc') + '/' + uid;
+  let lastAuto = autoAddr(sels[0] || avail[0]);
+  let fmtBox = null;
+  function rebuildFmts(items, keep){
+    $('#sv-fmt-wrap').innerHTML = mselHTML('sv-fmt', items, keep);
+    fmtBox = bindMsel('sv-fmt', vals => {
+      /* 地址仍是自动生成的（或为空）时，跟随首个服务格式更新 */
+      const next = autoAddr(vals[0] || items[0]);
+      if (aInp.value === '' || aInp.value === lastAuto) aInp.value = next;
+      lastAuto = next;
+    });
+  }
+  rebuildFmts(avail, sels);
+  /* 数据类型变化 → 刷新服务格式可选项，并套用该类型的默认勾选 */
+  tSel.onchange = () => {
+    const items = SERVICE_FORMATS[tSel.value] || [];
+    const keep = fmtBox.get().filter(f => items.indexOf(f) >= 0);
+    rebuildFmts(items, keep.length ? keep : defaultFormats(tSel.value));
+  };
+}
+
+/* 多选服务格式后，按格式前缀派生地址 */
+function deriveAddr(addr, fmt, uid){
+  const pre = SERVICE_PATH[fmt] || 'svc';
+  if (/\/api\/services\/[^/]+\//.test(addr)) {
+    return addr.replace(/\/api\/services\/[^/]+\//, '/api/services/' + pre + '/');
+  }
+  return '/api/services/' + pre + '/' + uid;
+}
+
+/* ============ 发布弹窗 ============ */
+function openPublish(rid){
+  const r = resources.find(x => x.id === rid);
+  if (!r) return;
+  const uid = r.id.slice(-6);
+  const fmts = defaultFormats(r.type);
+  serviceForm({
+    title: r.published ? '重新发布数据服务' : '发布数据服务',
+    name: r.name,
+    type: r.type,
+    formats: fmts,
+    addr: '/api/services/' + (SERVICE_PATH[fmts[0]] || 'svc') + '/' + uid,
+    uid,
+    onOk: d => {
+      const now = new Date(); const p = n => String(n).padStart(2,'0');
+      /* 多选服务格式 → 一条服务记录承载多个格式，地址取首个格式对应的地址 */
+      services.unshift({
+        id: nid(), name: d.name, type: d.type, format: d.formats[0], formats: d.formats.slice(),
+        dataFormat: TYPE_FORMAT[d.type] || '',
+        addr: deriveAddr(d.addr, d.formats[0], uid), publisher: '超级管理员',
+        time: now.getFullYear()+'-'+p(now.getMonth()+1)+'-'+p(now.getDate())+' '+p(now.getHours())+':'+p(now.getMinutes())+':'+p(now.getSeconds()),
+        status: '启用', tileStatus: '', mapStatus: '未添加到地图'
+      });
+      r.published = true;
+      upRender(); pb.page = 1; pbRender();
+      toast('服务「' + d.name + '」发布成功 · ' + d.formats.join(' / '));
+    }
+  });
+}
+
+/* ============ 新增服务弹窗 ============ */
+function openAddService(){
+  const t0 = Object.keys(TYPE_FORMATS)[0];
+  const f0 = defaultFormats(t0);
+  const uid = nid().slice(-6);                        /* 预先取号，用于生成服务地址 */
+  serviceForm({
+    title: '新增服务',
+    name: '',
+    type: t0,
+    formats: f0,
+    addr: '/api/services/' + SERVICE_PATH[f0[0]] + '/' + uid,
+    uid,
+    onOk: d => {
+      const now = new Date(); const p = n => String(n).padStart(2,'0');
+      services.unshift({
+        id: nid(), name: d.name, type: d.type, format: d.formats[0], formats: d.formats.slice(),
+        dataFormat: TYPE_FORMAT[d.type] || '',
+        addr: deriveAddr(d.addr, d.formats[0], uid), publisher: '超级管理员',
+        time: now.getFullYear()+'-'+p(now.getMonth()+1)+'-'+p(now.getDate())+' '+p(now.getHours())+':'+p(now.getMinutes())+':'+p(now.getSeconds()),
+        status: '启用', tileStatus: '', mapStatus: '未添加到地图'
+      });
+      upRender(); pb.page = 1; pbRender();
+      toast('服务「' + d.name + '」新增成功 · ' + d.formats.join(' / '));
+    }
+  });
+}
+
+/* 服务格式展示：多格式以 “ / ” 相连 */
+const fmtText = s => ((s.formats && s.formats.length) ? s.formats : [s.format]).join(' / ');
+
+/* ============ 预览 ============ */
+const LAYERS = [
+  ['影像底图','#8ab6f5',1],['地形','#9ec6a4',1],['建筑三维模型','#7f95b8',1],
+  ['空域边界','#e5484d',1],['北斗网格','#7c5cf0',0],['航线航路','#1fa463',0],['目标航迹','#e08b1b',0]
+];
+function sceneSVG(show){
+  const layer = (name) => show[name] !== false;
+  let g = '';
+  /* 地面网格 */
+  for (let i=-7;i<=7;i++){
+    const x = 420 + i*62, x2 = 420 + i*8;
+    g += '<line x1="'+x+'" y1="360" x2="'+x2+'" y2="228" stroke="#c3d3e6" stroke-width="1"/>';
+  }
+  for (let k=1;k<=7;k++){
+    const y = 228 + k*k*2.7, w = 60 + k*44;
+    g += '<line x1="'+(420-w)+'" y1="'+y+'" x2="'+(420+w)+'" y2="'+y+'" stroke="#c3d3e6" stroke-width="1"/>';
+  }
+  /* 建筑 */
+  const b = (x,y,w,h,top) => '<polygon points="'+x+','+y+' '+(x+w)+','+y+' '+(x+w)+','+(y-h)+' '+x+','+(y-h)+'" fill="#b9c9dd"/>' +
+    '<polygon points="'+x+','+(y-h)+' '+(x+w)+','+(y-h)+' '+(x+w+8)+','+(y-h-7)+' '+(x+8)+','+(y-h-7)+'" fill="'+top+'"/>';
+  if (layer('建筑三维模型')){
+    g += b(300,300,52,64,'#dbe6f3') + b(370,318,40,40,'#d3e0f0') + b(430,292,58,78,'#e2ecf7') +
+         b(505,312,44,52,'#d7e3f1') + b(556,300,36,30,'#cfdcee') + b(240,330,40,34,'#c9d7e9') +
+         b(470,336,30,22,'#c9d7e9');
+  }
+  if (layer('空域边界')){
+    g += '<polygon points="180,96 470,60 610,150 520,258 250,244 160,180" fill="rgba(229,72,77,.07)" stroke="#e5484d" stroke-width="1.6" stroke-dasharray="7 5"/>' +
+         '<text x="196" y="88" font-size="11" fill="#e5484d">空域边界 · 管制区 A-03</text>';
+  }
+  if (layer('北斗网格')){
+    let gg = '';
+    for (let i=0;i<6;i++) gg += '<line x1="'+(200+i*70)+'" y1="120" x2="'+(200+i*70)+'" y2="250" stroke="rgba(124,92,240,.45)" stroke-width="1"/>';
+    for (let j=0;j<4;j++) gg += '<line x1="200" y1="'+(120+j*44)+'" x2="550" y2="'+(120+j*44)+'" stroke="rgba(124,92,240,.45)" stroke-width="1"/>';
+    g += gg + '<text x="556" y="252" font-size="11" fill="#7c5cf0">北斗网格</text>';
+  }
+  if (layer('航线航路')){
+    g += '<path d="M110 320 C 220 250, 300 210, 430 176 S 560 150, 640 128" fill="none" stroke="#1fa463" stroke-width="2"/>' +
+         '<path d="M110 320 C 220 250, 300 210, 430 176 S 560 150, 640 128" fill="none" stroke="rgba(31,164,99,.25)" stroke-width="7"/>' +
+         '<text x="96" y="338" font-size="11" fill="#1fa463">航线 L-2026-07</text>';
+  }
+  if (layer('目标航迹')){
+    g += '<path d="M150 300 C 250 262, 330 232, 420 196 S 520 168, 596 156" fill="none" stroke="#e08b1b" stroke-width="1.8" stroke-dasharray="6 4"/>' +
+         '<circle cx="596" cy="156" r="6.5" fill="#e08b1b"/><circle cx="596" cy="156" r="12" fill="none" stroke="rgba(224,139,27,.45)" stroke-width="1.5"/>' +
+         '<rect x="546" y="120" width="130" height="26" rx="4" fill="#fff" stroke="#e6e9f0"/>' +
+         '<text x="556" y="137" font-size="11" fill="#3c4b60">UAV-0421  ·  120m  AGL</text>';
+  }
+  return '<svg viewBox="0 0 680 380" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">' +
+    '<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dbe9f9"/><stop offset="1" stop-color="#f2f7fd"/></linearGradient>' +
+    '<linearGradient id="grd" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eaf1f9"/><stop offset="1" stop-color="#dfe9f5"/></linearGradient></defs>' +
+    '<rect width="680" height="380" fill="url(#sky)"/>' +
+    '<rect y="228" width="680" height="152" fill="url(#grd)"/>' +
+    (layer('影像底图') ? '<text x="16" y="246" font-size="11" fill="#8ba0bb">DOM 影像底图 · 0.2m 分辨率</text>' : '') +
+    (layer('地形') ? '<text x="600" y="374" font-size="11" fill="#8ba0bb">DEM 地形</text>' : '') +
+    g + '</svg>';
+}
+function openPreview(sid){
+  const s = services.find(x => x.id === sid);
+  const url = svcUrl(s);
+  const show = {}; LAYERS.forEach(l => show[l[0]] = !!l[2]);
+  const body =
+    '<div class="pv-wrap">' +
+      '<div class="pv-stage" id="vp">' +
+        '<div class="vp-tools"><span>视距 1280m</span><span>视角 俯仰 -32°</span><span>时间基准 UTC+8</span><span>坐标系 CGCS2000</span></div>' +
+        sceneSVG(show) +
+        '<div class="vp-scale">1 : 5 000</div>' +
+      '</div>' +
+      '<aside class="pv-side">' +
+        '<div class="panel-title">服务信息</div>' +
+        '<div class="info-row"><span class="k">服务名称</span><span class="v">' + esc(s.name) + '</span></div>' +
+        '<div class="info-row"><span class="k">数据类型</span><span class="v">' + esc(typeLabel(s.type)) + '</span></div>' +
+        '<div class="info-row"><span class="k">服务格式</span><span class="v">' + esc(fmtText(s)) + '</span></div>' +
+        '<div class="info-row"><span class="k">发布人</span><span class="v">' + esc(s.publisher) + '</span></div>' +
+        '<div class="info-row"><span class="k">发布时间</span><span class="v">' + esc(s.time) + '</span></div>' +
+        '<div class="info-row"><span class="k">使用状态</span><span class="v">' + esc(s.status) + '</span></div>' +
+        '<div class="info-row"><span class="k">更新状态</span><span class="v">' + esc(s.mapStatus || '') + '</span></div>' +
+        '<div class="info-row" style="border-bottom:none;"><span class="k">切片状态</span><span class="v">' + (s.tileStatus || '-') + '</span></div>' +
+        '<div class="panel-title" style="margin-top:14px;">服务地址</div>' +
+        '<div class="url-box"><span id="p-url">' + esc(url) + '</span><b class="copy" id="p-copy">复制</b></div>' +
+      '</aside>' +
+    '</div>';
+  openDialog('服务预览 · ' + esc(s.name), body, [['关闭','btn-plain']], () => true, false, false, true);
+  $('#p-copy').onclick = () => {
+    const t = $('#p-url').textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).finally(() => toast('服务地址已复制'));
+    else toast('服务地址已复制：' + t);
+  };
+}
+
+/* ============ 数据详情弹窗 ============ */
+function openDetailResource(rid){
+  const r = resources.find(x => x.id === rid);
+  if (!r) return;
+  const row = (k, v) => '<div class="info-row"><span class="k">' + k + '</span><span class="v">' + esc(v || '—') + '</span></div>';
+  const srcTxt = (r.source || '本地上传') + (r.path ? '（' + r.path + '）' : '');
+  const stCls = r.status === '数据上传成功' ? 'tag-ok' : (r.status === '数据上传失败' ? '' : 'tag-no');
+  const body =
+    '<div class="panel-title">基本信息</div>' +
+    row('数据名称', r.name) +
+    row('数据类型', typeLabel(r.type)) +
+    row('数据格式', r.format) +
+    row('数据大小', r.size) +
+    row('上传人', r.uploader) +
+    row('上传时间', r.time) +
+    '<div class="info-row"><span class="k">上传状态</span><span class="v">' + esc(r.status) +
+      (r.status === '数据上传中' ? '（' + (Number(r.progress) || 0) + '%）' : '') + '</span></div>' +
+    row('数据来源', srcTxt) +
+    row('是否已发布服务', r.published ? '是' : '否') +
+    '<div class="panel-title" style="margin-top:14px;">数据说明</div>' +
+    '<div class="detail-note">' + esc(r.note || '（无备注）') + '</div>';
+  openDialog('数据详情 · ' + esc(r.name), body, [['关闭','btn-plain']], () => true, false, true);
+}
+
+/* ============ 服务详情弹窗 ============ */
+function openDetailService(sid){
+  const s = services.find(x => x.id === sid);
+  if (!s) return;
+  const row = (k, v) => '<div class="info-row"><span class="k">' + k + '</span><span class="v">' + esc(v || '—') + '</span></div>';
+  const body =
+    '<div class="panel-title">服务信息</div>' +
+    row('服务名称', s.name) +
+    row('数据类型', typeLabel(s.type)) +
+    row('数据格式', s.dataFormat || TYPE_FORMAT[s.type] || '') +
+    row('服务格式', fmtText(s)) +
+    row('发布协议', SERVICE_PROTOCOL[s.format] || '') +
+    row('发布人', s.publisher) +
+    row('发布时间', s.time) +
+    row('使用状态', s.status) +
+    row('更新状态', s.mapStatus || '') +
+    row('切片状态', s.tileStatus || '-') +
+    '<div class="panel-title" style="margin-top:14px;">服务地址</div>' +
+    '<div class="url-box"><span id="d-url">' + esc(svcUrl(s)) + '</span><b class="copy" id="d-copy">复制</b></div>';
+  openDialog('服务详情 · ' + esc(s.name), body, [['关闭','btn-plain']], () => true, false, true);
+  $('#d-copy').onclick = () => copySvcUrl($('#d-copy'), s.id);
+}
+
+/* ============ 图层配置 ============ */
+/* 目录树节点：{id, name, children:[], sid?, open?}  sid 存在则为服务图层节点 */
+let gid = 2000;
+const lgid = () => 'G' + (++gid);
+let layerTree = [];            /* 根目录下的目录（分组） */
+let laySel = null;             /* 当前选中的目录 id（用于「勾选放入目录」） */
+const lay = {page:1, pageSize:10, kw:'', type:''};
+let layPicked = new Set();
+const layOpen = {};            /* 目录展开状态：{nodeId: true} */
+let layDefaultOpen = {};       /* 服务「默认打开」开关：{sid: true} */
+
+const TICO_FOLDER = '<svg class="tico folder" viewBox="0 0 20 20"><path d="M2 5.5c0-.83.67-1.5 1.5-1.5h3.7l1.6 1.8h7.2c.83 0 1.5.67 1.5 1.5v7.2c0 .83-.67 1.5-1.5 1.5H3.5c-.83 0-1.5-.67-1.5-1.5z"/></svg>';
+const TICO_LAYER  = '<svg class="tico layer" viewBox="0 0 20 20"><path d="M10 2.5l7 3.8-7 3.8-7-3.8z"/><path d="M3.4 10.2l6.6 3.6 6.6-3.6v2.1L10 16 3.4 12.3z" opacity=".55"/></svg>';
+
+function findNode(nodes, id){
+  for (const n of nodes){
+    if (n.id === id) return n;
+    const r = findNode(n.children || [], id);
+    if (r) return r;
+  }
+  return null;
+}
+/* 按服务 id 找出对应的图层节点 */
+function findBySid(nodes, sid){
+  for (const n of nodes){
+    if (n.sid === sid) return n;
+    const r = findBySid(n.children || [], sid);
+    if (r) return r;
+  }
+  return null;
+}
+/* 找出某服务所在目录（一个服务只挂一次） */
+function findParentOf(nodes, sid, parent){
+  for (const n of nodes){
+    if (n.sid === sid) return parent;
+    const r = findParentOf(n.children || [], sid, n);
+    if (r) return r;
+  }
+  return null;
+}
+function removeBySid(nodes, sid){
+  for (let i = 0; i < nodes.length; i++){
+    if (nodes[i].sid === sid){ nodes.splice(i, 1); return true; }
+    if (removeBySid(nodes[i].children || [], sid)) return true;
+  }
+  return false;
+}
+function removeNode(nodes, id){
+  for (let i = 0; i < nodes.length; i++){
+    if (nodes[i].id === id){ nodes.splice(i, 1); return true; }
+    if (removeNode(nodes[i].children || [], id)) return true;
+  }
+  return false;
+}
+function countLayers(n){
+  return (n.sid ? 1 : 0) + (n.children || []).reduce((a, c) => a + countLayers(c), 0);
+}
+/* 服务是否已在目录树中 */
+const inTree = sid => !!findBySid(layerTree, sid);
+
+/* ---------- 左侧目录树 ---------- */
+function treeHTML(nodes){
+  return nodes.map(n => {
+    const isFolder = !n.sid;
+    const kids = n.children || [];
+    const open = isFolder ? layOpen[n.id] !== false : true;
+    return '<div class="tnode">' +
+      '<div class="trow' + (laySel === n.id ? ' sel' : '') + '" data-nid="' + n.id + '"' +
+        (isFolder ? ' data-drop="1"' : '') + ' draggable="' + (n.sid ? 'true' : 'false') + '">' +
+        (isFolder
+          ? '<span class="caret' + (open ? ' open' : '') + '" data-toggle="' + n.id + '">▶</span>'
+          : '<span class="caret leaf"></span>') +
+        (isFolder ? TICO_FOLDER : TICO_LAYER) +
+        '<span class="tname">' + esc(n.name) + '</span>' +
+        '<span class="tacts">' +
+          '<button class="tact" data-act="up" data-nid="' + n.id + '" title="上移">↑</button>' +
+          '<button class="tact" data-act="down" data-nid="' + n.id + '" title="下移">↓</button>' +
+          '<button class="tact" data-act="rename" data-nid="' + n.id + '" title="重命名">✎</button>' +
+          (isFolder
+            ? '<button class="tact del" data-act="delgroup" data-nid="' + n.id + '" title="删除目录">✕</button>'
+            : '<button class="tact del" data-act="removelayer" data-nid="' + n.id + '" title="移出目录">✕</button>') +
+        '</span>' +
+      '</div>' +
+      (isFolder
+        ? '<div class="tchildren' + (open ? '' : ' hidden') + '">' +
+            (kids.length ? treeHTML(kids) : '<div class="tree-drop" data-drop="1" data-nid="' + n.id + '"><div class="tree-empty">拖拽或勾选右侧服务放入此目录</div></div>') +
+          '</div>'
+        : '') +
+    '</div>';
+  }).join('');
+}
+
+function renderLayer(){
+  $('#lay-tree').innerHTML = layerTree.length
+    ? '<div class="tree-drop" data-drop="1" data-nid="">' + treeHTML(layerTree) + '</div>'
+    : '<div class="tree-empty">暂无目录<br>点击上方「＋ 新增目录」开始搭建目录结构<br>再到右侧勾选已发布服务放入目录</div>';
+  bindTree();
+  renderLayTable();
+}
+
+function bindTree(){
+  const tree = $('#lay-tree');
+  tree.querySelectorAll('.trow').forEach(row => {
+    row.onclick = e => {
+      if (e.target.closest('.tact') || e.target.closest('.caret')) return;
+      const n = findNode(layerTree, row.dataset.nid);
+      if (!n || n.sid) return;              /* 只有目录节点可被选为“放入目标” */
+      laySel = n.id;
+      renderLayer();
+      refreshLayTip();
+    };
+    /* 树内图层可拖到其它目录 */
+    row.ondragstart = e => {
+      const n = findNode(layerTree, row.dataset.nid);
+      if (!n || !n.sid) { e.preventDefault(); return; }
+      e.dataTransfer.setData('text/plain', n.sid);
+      e.dataTransfer.effectAllowed = 'move';
+    };
+    if (row.dataset.drop){
+      row.ondragover = e => { e.preventDefault(); row.classList.add('dragover'); };
+      row.ondragleave = () => row.classList.remove('dragover');
+      row.ondrop = e => {
+        e.preventDefault(); e.stopPropagation();
+        row.classList.remove('dragover');
+        moveService(e.dataTransfer.getData('text/plain'), row.dataset.nid);
+      };
+    }
+  });
+  tree.querySelectorAll('.caret[data-toggle]').forEach(c => {
+    c.onclick = e => {
+      e.stopPropagation();
+      const id = c.dataset.toggle;
+      layOpen[id] = layOpen[id] === false;
+      renderLayer();
+    };
+  });
+  tree.querySelectorAll('.tact').forEach(b => {
+    b.onclick = e => {
+      e.stopPropagation();
+      const n = findNode(layerTree, b.dataset.nid);
+      if (!n) return;
+      const act = b.dataset.act;
+      if (act === 'rename') openRename(n, !n.sid);
+      else if (act === 'up') sortSibling(n, -1);
+      else if (act === 'down') sortSibling(n, 1);
+      else if (act === 'delgroup'){
+        openDialog('删除目录', '<div style="font-size:13.5px;color:#3c4b60;line-height:1.8;">确认删除目录 <b>' + esc(n.name) + '</b>？' +
+          '<div class="hint">该目录下 ' + countLayers(n) + ' 个图层将一并移出目录树，服务本身不受影响。</div></div>',
+          [['取消','btn-plain'],['确认删除','btn-primary']], ok => {
+            if (!ok) return;
+            removeNode(layerTree, n.id);
+            if (laySel === n.id) laySel = null;
+            renderLayer(); toast('目录已删除');
+          });
+      } else if (act === 'removelayer'){
+        removeBySid(layerTree, n.sid);
+        renderLayer(); toast('已移出目录');
+      }
+    };
+  });
+  tree.querySelectorAll('.tree-drop').forEach(dz => {
+    dz.ondragover = e => { e.preventDefault(); dz.classList.add('dragover'); };
+    dz.ondragleave = () => dz.classList.remove('dragover');
+    dz.ondrop = e => {
+      e.preventDefault(); e.stopPropagation();
+      dz.classList.remove('dragover');
+      moveService(e.dataTransfer.getData('text/plain'), dz.dataset.nid);
+    };
+  });
+}
+
+/* 同级上移 / 下移 */
+function sortSibling(node, dir){
+  function walk(list){
+    const i = list.indexOf(node);
+    if (i >= 0){
+      const j = i + dir;
+      if (j < 0 || j >= list.length) return false;
+      list.splice(i, 1); list.splice(j, 0, node);
+      return true;
+    }
+    return (node.children || []).some(() => false);
+  }
+  if (walk(layerTree) || (function find(list){
+    for (const n of list){
+      const i = n.children ? n.children.indexOf(node) : -1;
+      if (i >= 0){
+        const j = i + dir;
+        if (j < 0 || j >= n.children.length) return false;
+        n.children.splice(i, 1); n.children.splice(j, 0, node);
+        return true;
+      }
+      if (n.children && find(n.children)) return true;
+    }
+    return false;
+  })(layerTree)){
+    renderLayer();
+  }
+}
+
+/* 拖拽移动：把服务移到目标目录 */
+function moveService(sid, groupId){
+  if (!sid) return;
+  const n = findBySid(layerTree, sid);
+  if (!n) return;
+  let group = groupId ? findNode(layerTree, groupId) : null;
+  if (!group || group.sid) return;             /* 只能放到目录节点下 */
+  const cur = findParentOf(layerTree, sid, null);
+  if (cur && cur.id === group.id) return;
+  removeBySid(layerTree, sid);
+  group.children = group.children || [];
+  group.children.push({ id: lgid(), name: n.name, sid, children: [] });
+  layOpen[group.id] = true;
+  renderLayer();
+  toast('已移动到目录「' + group.name + '」');
+}
+
+function openRename(node, isFolder){
+  openDialog(isFolder ? '重命名目录' : '重命名图层',
+    '<div class="field" style="margin-bottom:0;"><label>名称</label>' +
+    '<input type="text" id="rn-name" value="' + esc(node.name) + '"></div>',
+    [['取消','btn-plain'],['保存','btn-primary']], i => {
+      if (i !== 1) return true;
+      const v = $('#rn-name').value.trim();
+      if (!v) { toast('名称不能为空', 'err'); return false; }
+      node.name = v;
+      renderLayer(); toast('已重命名');
+      return true;
+    }, false, true);
+}
+
+/* ---------- 右侧：已发布服务列表 ---------- */
+function layList(){
+  const kw = lay.kw.toLowerCase();
+  const list = services.filter(s =>
+    (!lay.type || s.type === lay.type) &&
+    (!kw || s.name.toLowerCase().includes(kw))
+  );
+  return list;
+}
+function setLayTip(){
+  const sel = laySel ? findNode(layerTree, laySel) : null;
+  const el = $('#lay-tip');
+  el.className = 'lay-tip' + (layPicked.size && !sel ? ' warn' : '');
+  el.textContent = layPicked.size
+    ? (sel ? '将放入目录：' + sel.name : '请先在左侧选中一个目录')
+    : (sel ? '当前目录：' + sel.name : '请在左侧选中目录后勾选服务');
+}
+function refreshLayTip(){ setLayTip(); }
+
+function renderLayTable(){
+  const all = layList();
+  const pages = Math.max(1, Math.ceil(all.length / lay.pageSize));
+  if (lay.page > pages) lay.page = pages;
+  const st = (lay.page - 1) * lay.pageSize;
+  const rows = all.slice(st, st + lay.pageSize);
+  $('#lay-tbody').innerHTML = rows.length ? rows.map(s => {
+    const used = inTree(s.id);
+    return '<tr data-id="' + s.id + '" class="' + (used ? 'in-tree' : '') + '">' +
+      '<td><input type="checkbox" class="cb" data-role="row"' +
+        (used ? ' disabled' : (layPicked.has(s.id) ? ' checked' : '')) + '></td>' +
+      '<td class="name">' + esc(s.name) + '</td>' +
+      '<td>' + esc(typeLabel(s.type)) + '</td>' +
+      '<td>' + esc(s.format) + '</td>' +
+      '<td><span class="url-cell" title="' + esc(svcUrl(s)) + '">' + esc(svcUrl(s)) + '</span></td>' +
+      '<td><div class="sw-wrap' + (layDefaultOpen[s.id] ? ' on' : '') + '" data-act="def" data-id="' + s.id + '"><span class="sw"></span></div></td>' +
+      '<td><div class="ops">' +
+        (s.tileStatus === '切片中'
+          ? '<button class="icobtn dis" title="切片完成后才可预览">' +
+            '<svg viewBox="0 0 20 20"><path d="M1.5 10S4.8 4.6 10 4.6 18.5 10 18.5 10 15.2 15.4 10 15.4 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.5"/></svg></button>'
+          : '<button class="icobtn" data-act="view" title="预览">' +
+            '<svg viewBox="0 0 20 20"><path d="M1.5 10S4.8 4.6 10 4.6 18.5 10 18.5 10 15.2 15.4 10 15.4 1.5 10 1.5 10z"/><circle cx="10" cy="10" r="2.5"/></svg></button>') +
+        '<button class="icobtn" data-act="detail" title="详情">' +
+          '<svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v4.5M10 6.6v.1"/></svg></button>' +
+        '<button class="icobtn del" data-act="del" title="删除">' +
+          '<svg viewBox="0 0 20 20"><path d="M4 6h12M8 6V4.5h4V6M6 6l.7 9.2h6.6L14 6"/></svg></button>' +
+      '</div></td></tr>';
+  }).join('') : '<tr><td colspan="7" style="text-align:center;color:#98a2b3;padding:44px 0;">没有匹配的已发布服务</td></tr>';
+
+  $('#lay-tbody').querySelectorAll('tr').forEach(tr => {
+    const id = tr.dataset.id;
+    if (!id) return;
+    const cb = tr.querySelector('input[data-role=row]');
+    if (cb && !cb.disabled) cb.onchange = () => {
+      cb.checked ? layPicked.add(id) : layPicked.delete(id);
+      syncLayPicked();
+    };
+    const sw = tr.querySelector('.sw-wrap[data-act="def"]');
+    if (sw) sw.onclick = () => {
+      layDefaultOpen[id] = !layDefaultOpen[id];
+      sw.classList.toggle('on', layDefaultOpen[id]);
+    };
+    tr.querySelectorAll('.icobtn').forEach(b => {
+      if (b.classList.contains('dis')) return;      /* 置灰的按钮不绑定任何操作 */
+      b.onclick = () => {
+        const a = b.dataset.act;
+        if (a === 'view') openPreview(id);
+        else if (a === 'detail') openDetailService(id);
+        else confirmDel('service', id);
+      };
+    });
+  });
+  const ids = rows.filter(s => !inTree(s.id)).map(s => s.id);
+  const allSel = ids.length > 0 && ids.every(i => layPicked.has(i));
+  const partSel = ids.some(i => layPicked.has(i));
+  $('#lay-all').checked = allSel;
+  $('#lay-all').indeterminate = !allSel && partSel;
+  $('#lay-batch').classList.toggle('hidden', layPicked.size === 0);
+  $('#lay-count').textContent = layPicked.size;
+  setLayTip();
+  renderLayPager(all.length);
+}
+function renderLayPager(total){
+  renderPager($('#lay-pager'), lay, total, renderLayTable, renderLayTable);
+}
+function syncLayPicked(){
+  $('#lay-batch').classList.toggle('hidden', layPicked.size === 0);
+  $('#lay-count').textContent = layPicked.size;
+  setLayTip();
+}
+
+/* 勾选后统一放入当前选中目录 */
+$('#lay-apply').onclick = () => {
+  if (!layPicked.size) return;
+  const target = laySel ? findNode(layerTree, laySel) : null;
+  if (!target || target.sid){
+    toast('请先在左侧选中一个目录', 'warn');
+    return;
+  }
+  let n = 0;
+  Array.from(layPicked).forEach(sid => {
+    const s = services.find(x => x.id === sid);
+    if (!s || inTree(sid)) return;
+    target.children = target.children || [];
+    target.children.push({ id: lgid(), name: s.name, sid, children: [] });
+    n++;
+  });
+  layOpen[target.id] = true;
+  layPicked.clear();
+  renderLayer();
+  toast(n ? '已将 ' + n + ' 个服务放入目录「' + target.name + '」' : '所选服务均已在目录树中', n ? '' : 'warn');
+};
+
+$('#lay-all').onchange = function(){
+  const all = layList();
+  const st = (lay.page - 1) * lay.pageSize;
+  all.slice(st, st + lay.pageSize).forEach(s => {
+    if (inTree(s.id)) return;
+    this.checked ? layPicked.add(s.id) : layPicked.delete(s.id);
+  });
+  renderLayTable();
+};
+$('#lay-kw').oninput = () => { lay.kw = $('#lay-kw').value.trim(); lay.page = 1; renderLayTable(); };
+$('#lay-kw').onkeydown = e => { if (e.key === 'Enter') renderLayTable(); };
+$('#lay-type').onchange = () => { lay.type = $('#lay-type').value; lay.page = 1; renderLayTable(); };
+$('#lay-search').onclick = () => { lay.kw = $('#lay-kw').value.trim(); lay.type = $('#lay-type').value; lay.page = 1; renderLayTable(); };
+$('#lay-sreset').onclick = () => { $('#lay-kw').value=''; $('#lay-type').value=''; lay.kw=lay.type=''; lay.page=1; renderLayTable(); };
+
+/* 新增目录（可多层：选中目录后新增则建为其子目录） */
+$('#lay-addgroup').onclick = () => {
+  const sel = laySel ? findNode(layerTree, laySel) : null;
+  openDialog('新增目录',
+    '<div class="field" style="margin-bottom:0;"><label><span class="req">*</span>目录名称</label>' +
+    '<input type="text" id="ng-name" placeholder="如：空间数据 / 三维模型 / 基础服务">' +
+    '<div class="hint">' + (sel && !sel.sid ? '将创建在「' + esc(sel.name) + '」下' : '将创建在根目录下；如需建子目录，请先在左侧选中父目录') + '</div></div>',
+    [['取消','btn-plain'],['创建','btn-primary']], i => {
+      if (i !== 1) return true;
+      const v = $('#ng-name').value.trim();
+      if (!v) { toast('请填写目录名称', 'err'); return false; }
+      const g = { id: lgid(), name: v, children: [] };
+      if (sel && !sel.sid){ sel.children.push(g); layOpen[sel.id] = true; }
+      else layerTree.push(g);
+      laySel = g.id;
+      renderLayer(); toast('目录「' + v + '」已创建');
+      return true;
+    }, false, true);
+};
+$('#lay-rootcaret').onclick = () => {
+  const closed = $('#lay-rootcaret').classList.toggle('open');
+  $('#lay-tree').classList.toggle('hidden', closed);
+};
+$('#lay-save').onclick = () => {
+  const total = layerTree.reduce((a, n) => a + countLayers(n), 0);
+  toast('目录树已保存（' + layerTree.length + ' 个一级目录 / ' + total + ' 个图层）');
+};
+/* ============ 页面切换 ============ */
+$$('.menu-item[data-page]').forEach(m => m.onclick = () => {
+  const p = m.dataset.page;
+  $$('.menu-item').forEach(x => x.classList.remove('active'));
+  m.classList.add('active');
+  $('#page-upload').classList.toggle('hidden', p !== 'upload');
+  $('#page-publish').classList.toggle('hidden', p !== 'publish');
+  $('#page-layer').classList.toggle('hidden', p !== 'layer');
+  $('#crumb-current').textContent = p === 'upload' ? '数据管理' : (p === 'publish' ? '服务管理' : '图层配置');
+  if (p === 'upload') upRender();
+  else if (p === 'publish') pbRender();
+  else renderLayer();
+});
+
+/* ============ 初始化 ============ */
+upRender();
+pbRender();
+/* 图层配置：初始为空目录树，由用户自行新增目录并勾选服务放入 */
+</script>
+</body>
+</html>

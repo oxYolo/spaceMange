@@ -1,0 +1,2 @@
+com.whulri.geodata.datamanage.config.DataManagementAutoConfiguration
+com.whulri.geodata.datarelease.config.DataReleaseAutoConfiguration
