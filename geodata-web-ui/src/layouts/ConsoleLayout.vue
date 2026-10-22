@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import Icon from '@/components/common/Icon.vue'
@@ -14,7 +14,10 @@ import { useUserStore } from '@/stores/user'
 const route = useRoute()
 const router = useRouter()
 const search = useSearchStore()
-const USER = useUserStore().userName
+const userStore = useUserStore()
+const USER = userStore.userName
+const navOpen = ref(false)
+watch(() => route.path, () => { navOpen.value = false })
 
 const closed = ref<Record<string, boolean>>({})
 const toggle = (id: string) => (closed.value[id] = !closed.value[id])
@@ -26,7 +29,7 @@ const activePath = computed(() => route.path)
 
 /* ---------------- 导航角标实时计数（数据管理 = 二维资源数 + 三维资源数） ---------------- */
 const liveCounts = ref<Record<string, number>>({})
-onMounted(async () => {
+async function refreshManageCount() {
   let total = 0
   // 二维资源总数：GET /layerContent/GetAllCount（裸返回 Integer）
   try {
@@ -42,8 +45,13 @@ onMounted(async () => {
   } catch {
     /* 静默 */
   }
-  if (total > 0) liveCounts.value['/manage'] = total
+  liveCounts.value['/manage'] = total
+}
+onMounted(() => {
+  void refreshManageCount()
+  window.addEventListener('geodata:resources-changed', refreshManageCount)
 })
+onBeforeUnmount(() => window.removeEventListener('geodata:resources-changed', refreshManageCount))
 
 /** 角标：有实时计数用计数，否则回退到端点数标注 */
 function badgeOf(routePath: string, fallback = ''): string {
@@ -64,11 +72,21 @@ function onSearch() {
 }
 
 const envLabel = computed(() => `${urlConfig.envName} · ${urlConfig.baseUrl || '同源'}`)
+const mockMode = __GEODATA_MOCK__
 
 function copyBase() {
-  const text = urlConfig.baseUrl || window.location.origin
+  const text = mockMode ? `${window.location.origin}/api` : urlConfig.baseUrl || window.location.origin
   void copyText(text)
-  ElMessage.success('已复制后端地址：' + text)
+  ElMessage.success('已复制接口地址：' + text)
+}
+
+async function onLogout() {
+  try {
+    await userStore.logout()
+  } catch {
+    // 服务不可达时仍允许退出当前浏览器会话。
+  }
+  await router.replace('/login')
 }
 </script>
 
@@ -76,12 +94,15 @@ function copyBase() {
   <div class="layout">
     <!-- 顶栏 -->
     <div class="topbar">
+      <button class="nav-trigger" type="button" :aria-label="navOpen ? '关闭导航' : '打开导航'" @click="navOpen = !navOpen">
+        <Icon name="menu" :size="18" />
+      </button>
       <div class="brand">
         <span class="logo">
           <Icon name="layers" :size="16" :stroke="1.8" />
         </span>
         {{ urlConfig.systemName }}
-        <span class="env" @click="copyBase" :title="'点击复制后端地址'">{{ envLabel }}</span>
+        <span class="env" @click="copyBase" title="点击复制接口地址">{{ envLabel }}</span>
       </div>
 
       <div class="gsearch">
@@ -97,18 +118,20 @@ function copyBase() {
       <div class="tb-sp"></div>
 
       <button class="tb-btn" @click="copyBase">
-        <Icon name="db" :size="13" /> geodata-service :8982
+        <Icon name="db" :size="13" /> {{ mockMode ? '本地 Mock API' : 'geodata-service :8982' }}
       </button>
 
       <div class="tb-user">
         <span class="avatar">管</span>
-        <span>管理员 · admin</span>
+        <span>管理员 · {{ userStore.userName }}</span>
+        <button class="logout-button" type="button" @click="onLogout">退出</button>
       </div>
     </div>
 
     <div class="shell">
+      <button v-if="navOpen" class="nav-backdrop" type="button" aria-label="关闭导航" @click="navOpen = false"></button>
       <!-- 侧栏：主导航（原型三页）+ 高级功能折叠组 -->
-      <aside class="sidenav">
+      <aside class="sidenav" :class="{ 'nav-open': navOpen }">
         <div class="nav-cap">数据中台</div>
         <div
           v-for="m in NAV_MAIN"
@@ -158,6 +181,7 @@ function copyBase() {
           <b>{{ pageTitle }}</b>
           <span class="hint"></span>
         </div>
+        <div v-if="mockMode" class="mock-notice">当前展示本地示例数据；操作只影响本次开发服务进程，重启后恢复。</div>
         <div class="view">
           <router-view v-slot="{ Component }">
             <keep-alive :max="8">
@@ -171,8 +195,19 @@ function copyBase() {
 </template>
 
 <style scoped>
+.nav-trigger,
+.nav-backdrop { display: none; }
 .layout {
   height: 100%;
+}
+.mock-notice {
+  margin: 8px 14px 0;
+  padding: 7px 10px;
+  border: 1px solid #f1d9a2;
+  border-radius: 5px;
+  background: #fff9e9;
+  color: #825d1e;
+  font-size: 12px;
 }
 .topbar {
   height: var(--top-h);
@@ -292,6 +327,16 @@ function copyBase() {
   font-size: 11.5px;
   font-weight: 600;
 }
+.logout-button {
+  margin-left: 4px;
+  padding: 3px 5px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 12px;
+  cursor: pointer;
+}
+.logout-button:hover { color: var(--primary); }
 
 .nav-cap {
   padding: 12px 16px 6px;
@@ -430,5 +475,52 @@ function copyBase() {
   background: #fff;
   border-color: #bcd9f2;
   color: var(--primary);
+}
+@media (max-width: 900px) {
+  .nav-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink-2);
+    cursor: pointer;
+  }
+  .sidenav {
+    position: fixed;
+    z-index: 52;
+    top: var(--top-h);
+    bottom: 0;
+    left: 0;
+    width: var(--nav-w);
+    transform: translateX(-100%);
+    transition: transform .18s ease;
+    box-shadow: var(--sh-2);
+  }
+  .sidenav.nav-open { transform: translateX(0); }
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    z-index: 51;
+    inset: var(--top-h) 0 0;
+    border: 0;
+    background: rgba(17, 31, 48, .28);
+  }
+  .topbar { gap: 9px; }
+  .gsearch { min-width: 0; }
+  .brand { flex: 0 0 auto; }
+  .tb-btn { display: none; }
+  .tb-user { padding-left: 0; border-left: 0; }
+}
+@media (max-width: 680px) {
+  .gsearch, .tb-user > span:not(.avatar) { display: none; }
+  .topbar { padding: 0 10px; }
+  .brand { font-size: 13px; }
+  .brand .env { display: none; }
+  .logout-button { margin-left: 0; }
 }
 </style>

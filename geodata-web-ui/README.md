@@ -12,16 +12,24 @@
 ```bash
 cd geodata-web-ui
 npm install            # 依赖
-npm run dev            # http://localhost:9200 （已配 /api 代理 → http://localhost:8982）
+npm run dev            # http://localhost:9200 （默认启用本地 Mock，无需后端）
 npm run build          # 产物 dist/
 npm run type-check     # vue-tsc -p tsconfig.app.json --noEmit
 ```
 
-后端地址默认 `http://localhost:8982`，可用环境变量覆盖：
+开发时默认启用本地 Mock：`/api`、`/base-api` 由 Vite 本地处理，示例数据和常见增删改在当前开发服务进程内保存，重启后恢复。矢量 SHP 文件组支持本地分片上传、合并、入库、DBF 属性查看与服务发布流程联调；Mock 仅解析基本几何类型、范围和属性，不代替 GDAL、PostGIS 或 GeoServer。GIS 分析、转换等未模拟的操作返回明确的 501 错误。顶部会显示“本地 Mock”。
+
+矢量 Mock 联调可运行 `node scripts/test-vector-mock.mjs`。测试脚本生成点状 SHP/SHX/DBF 样本，覆盖上传、合并、入库、属性读取和 WMS 发布；需先运行 `npm run dev`。使用真实后端的导入与发布仍需相应后端服务。
+
+现在入口为 `#/login`。Mock 登录账号 `admin`、密码 `admin123`，只供本地界面联调；Mock 不提供真实访问控制。登录后 token 保存在浏览器会话中，勾选“记住账号”只保存账号，不保存密码。退出后会清除会话。截图右上角的输入法工具条属于操作系统，不是页面元素。
+
+连接真实后端时禁用 Mock。业务接口默认 `http://localhost:8982`；登录参考 Flyspace 的 `/auth/dronelogin`、`/system/user/getInfo` 和 `/auth/logout`，走独立的 `whulri-system` 基座服务（默认 `http://localhost:9201`），可用环境变量覆盖：
 
 ```bash
-GEODATA_API=http://192.168.10.58:8982 npm run dev
+GEODATA_MOCK=0 GEODATA_API=http://localhost:8982 BASE_API=http://localhost:9201 npm run dev
 ```
+
+Flyspace 在正式模式对登录密码使用 SM2 加密。此项目没有内置其他系统的公钥；正式对接时必须在 `public/config/urlConfig.js` 填入目标认证服务的 `authSm2PublicKey`，否则登录会明确报错。只启动本仓库的 `geodata-service:8982` 无法完成真实登录，因为它没有上述认证端点。
 
 生产部署：`public/config/urlConfig.js` 里 `production.baseUrl` 置空（与后端同域），由 nginx 把
 `/layerContent`、`/model3d` 等路径反代到 geodata-service；该文件运行时可直接修改，无需重新构建。

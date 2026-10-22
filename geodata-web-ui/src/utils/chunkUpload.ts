@@ -13,7 +13,7 @@ export async function chunkedUpload(file: File, onProgress: UploadProgress): Pro
   const totalParts = Math.max(1, Math.ceil(file.size / CHUNK))
   for (let i = 0; i < totalParts; i++) {
     const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, file.size))
-    await uploadApi.addChunk(blob, i + 1, gid)
+    await uploadApi.addChunk(blob, i + 1, gid, file.name)
     onProgress(Math.round(((i + 1) / totalParts) * 100), `正在上传分片 ${i + 1} / ${totalParts}`)
   }
   return uploadApi.fileMerge(file.name, gid)

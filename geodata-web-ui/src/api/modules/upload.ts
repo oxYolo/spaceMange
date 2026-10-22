@@ -7,10 +7,12 @@ export const uploadApi = {
     file: Blob,
     chunk: number,
     guid: string,
+    fileName: string,
     onProgress?: (p: number) => void,
   ) => {
     const fd = new FormData()
-    fd.append('file', file)
+    // 后端按 guid + 原始文件名 建分片目录；Blob 默认名 "blob" 会导致 FileMerge 找不到分片。
+    fd.append('file', file, fileName)
     fd.append('chunk', String(chunk))
     fd.append('guid', guid)
     return http.postFile<string>('/upload/UploadForBreakpoint/AddFiles', fd, { onProgress })

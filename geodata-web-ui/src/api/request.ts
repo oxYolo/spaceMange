@@ -1,6 +1,7 @@
 import axios, { type AxiosRequestConfig, type AxiosInstance } from 'axios'
 import { ElMessage } from 'element-plus'
 import urlConfig from '@/config'
+import { getToken, removeToken } from '@/auth/session'
 
 /** 统一返回体外壳：{ code, success, result, msg } */
 export interface ResultEnvelope<T = any> {
@@ -28,10 +29,11 @@ const service: AxiosInstance = axios.create({
 
 service.interceptors.request.use(
   (config) => {
-    // 预留：如需鉴权可在此注入 whulri 基座 Token
-    const token = localStorage.getItem('GeoDataToken')
-    if (token && config.headers) {
-      config.headers['Authorization'] = 'Bearer ' + token
+    const skipToken = config.headers?.isToken === false
+    if (config.headers) delete config.headers.isToken
+    const token = getToken()
+    if (!skipToken && token && config.headers) {
+      config.headers.Authorization = 'Bearer ' + token
     }
     return config
   },
@@ -55,6 +57,13 @@ service.interceptors.response.use(
       (status ? `请求失败（HTTP ${status}）` : error?.message || '网络异常，请检查后端服务是否已启动')
     if (!error?.config?.silent) {
       ElMessage.error(msg)
+    }
+    if (status === 401 && !String(error?.config?.url || '').startsWith('/auth/')) {
+      removeToken()
+      if (!window.location.hash.startsWith('#/login')) {
+        const redirect = window.location.hash.slice(1) || '/manage'
+        window.location.hash = '#/login?redirect=' + encodeURIComponent(redirect)
+      }
     }
     return Promise.reject(new Error(msg))
   },

@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { authApi } from '@/api/modules/auth'
+import { getToken, rememberAccount, removeToken, setToken } from '@/auth/session'
 
 const STORAGE_KEY = 'GeoDataUser'
 
@@ -21,6 +23,8 @@ function readStored(): string {
 export const useUserStore = defineStore('user', () => {
   /** 当前登录用户名（供 createUser / createBy / user 参数使用） */
   const userName = ref<string>(readStored())
+  const token = ref<string>(getToken())
+  const profileLoaded = ref(false)
 
   function setUser(name: string) {
     const v = (name || '').trim() || DEFAULT_USER
@@ -32,5 +36,44 @@ export const useUserStore = defineStore('user', () => {
     }
   }
 
-  return { userName, setUser }
+  async function loadProfile(): Promise<void> {
+    const response = await authApi.getUserInfo()
+    if (response.code !== 200 || !response.user?.userName) {
+      throw new Error(response.msg || '无法获取用户信息')
+    }
+    setUser(response.user.userName)
+    profileLoaded.value = true
+  }
+
+  async function login(username: string, password: string, rememberMe: boolean): Promise<void> {
+    const response = await authApi.login(username, password, rememberMe)
+    if (response.code !== 200 || !response.data?.access_token) {
+      throw new Error(response.msg || '登录失败')
+    }
+    token.value = response.data.access_token
+    setToken(token.value)
+    try {
+      await loadProfile()
+      rememberAccount(username, rememberMe)
+    } catch (error) {
+      clearSession()
+      throw error
+    }
+  }
+
+  function clearSession(): void {
+    token.value = ''
+    profileLoaded.value = false
+    removeToken()
+  }
+
+  async function logout(): Promise<void> {
+    try {
+      await authApi.logout()
+    } finally {
+      clearSession()
+    }
+  }
+
+  return { userName, token, profileLoaded, setUser, loadProfile, login, logout, clearSession }
 })

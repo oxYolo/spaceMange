@@ -58,6 +58,9 @@
 
   // 通用配置（地图底图 / 默认视图中心：赤壁市）
   var common = {
+    // 正式环境由对应的认证服务提供公钥；勿直接沿用其他系统的公钥。
+    authSm2PublicKey: "",
+    authSm2CipherMode: 1,
     tdtUrl: "http://t0.tianditu.com",
     tdtUrlHttps: "https://t0.tianditu.com",
     mapCenter: [113.9042, 29.7234],

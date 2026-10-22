@@ -408,7 +408,7 @@ export interface ListFilter {
   keyword?: string
   /** 所属目录（layerType = sdms_datatype id，仅二维生效） */
   layerType?: string
-  /** 仅看已发布（服务管理 / 图层配置用） */
+  /** true=已发布，false=未发布，undefined=全部 */
   publishedOnly?: boolean
 }
 
@@ -418,9 +418,8 @@ export interface PageResult {
 }
 
 /**
- * 合并查询：按筛选拆分到 layerContent / model3d 两个数据源，各自分页后按时间倒序合并。
- * 「全部」类型时两源各取一页合并（近似分页，第一版可接受）；
- * 指定类型时只查对应源；上传状态/关键字在前端对合并结果过滤。
+ * 合并查询：两源先取足够覆盖当前页的前 N 条，再全局排序分页。
+ * 后端不提供统一的上传状态和「未发布」计数；这两种筛选需读完候选记录再过滤，保证总数与分页一致。
  */
 export async function loadUnifiedPage(
   filter: ListFilter,
@@ -429,12 +428,28 @@ export async function loadUnifiedPage(
 ): Promise<PageResult> {
   const kw = (filter.keyword || '').trim()
   const t = filter.typeKey ? typeDef(filter.typeKey) : undefined
+  const clientFiltered = Boolean(filter.status) || filter.publishedOnly === false
+  const needed = Math.max(pageSize, pageSize * pageIndex)
+
+  async function collectAll(fetchPage: (size: number, index: number) => Promise<PageResult>): Promise<PageResult> {
+    const size = 200
+    const first = await fetchPage(size, 1)
+    const pages = Math.ceil(first.total / size)
+    if (pages <= 1) return first
+    const rows = [...first.rows]
+    for (let start = 2; start <= pages; start += 4) {
+      const count = Math.min(4, pages - start + 1)
+      const batch = await Promise.all(Array.from({ length: count }, (_, i) => fetchPage(size, start + i)))
+      rows.push(...batch.flatMap((part) => part.rows))
+    }
+    return { rows, total: first.total }
+  }
 
   const wantLayer = !t || t.src === 'layer'
   // 目录筛选仅对二维有意义（model3d 的 directoryId 是另一套 sdms_directorys，无管理端点）
   const wantM3d = (!t || t.src === 'm3d') && !filter.layerType
 
-  const jobs: Promise<{ rows: UnifiedRow[]; total: number }>[] = []
+  const jobs: Promise<PageResult>[] = []
 
   if (wantLayer) {
     const input: Record<string, any> = {}
@@ -444,44 +459,40 @@ export async function loadUnifiedPage(
     if (t) Object.assign(input, t.query)
     if (filter.layerType) input.layerType = filter.layerType
     if (filter.publishedOnly) input.publishStatus = '1'
-    jobs.push(
-      layerContentApi
-        .getPageListByName(input, pageSize, pageIndex)
-        .then((res: any) => ({ rows: pickList<any>(res).map(normalizeLayer), total: pickTotal(res, 0) }))
-        .catch(() => ({ rows: [] as UnifiedRow[], total: 0 })),
-    )
+    const fetchLayer = async (size: number, index: number): Promise<PageResult> => {
+      const res = await layerContentApi.getPageListByName(input, size, index)
+      return { rows: pickList<any>(res).map(normalizeLayer), total: pickTotal(res, 0) }
+    }
+    jobs.push(clientFiltered ? collectAll(fetchLayer) : fetchLayer(needed, 1))
   }
   if (wantM3d) {
-    const query: Record<string, any> = { pageNum: pageIndex, pageSize }
+    const query: Record<string, any> = {}
     if (kw) query.keyword = kw
     if (t) Object.assign(query, t.query)
     if (filter.publishedOnly) query.status = '4'
-    jobs.push(
-      model3dApi
-        .page(query)
-        .then((res: any) => {
-          // model3d/page 返回 Result<Page>：records/list 兼容
-          const list = pickList<any>(res?.result ?? res)
-          const total = pickTotal(res?.result ?? res, list.length)
-          return { rows: list.map(normalizeM3d), total }
-        })
-        .catch(() => ({ rows: [] as UnifiedRow[], total: 0 })),
-    )
+    const fetchM3d = async (size: number, index: number): Promise<PageResult> => {
+      const res: any = await model3dApi.page({ ...query, pageNum: index, pageSize: size })
+      const payload = res?.result ?? res
+      const list = pickList<any>(payload)
+      return { rows: list.map(normalizeM3d), total: pickTotal(payload, list.length) }
+    }
+    jobs.push(clientFiltered ? collectAll(fetchM3d) : fetchM3d(needed, 1))
   }
 
   const parts = await Promise.all(jobs)
   let rows = parts.flatMap((p) => p.rows)
-  const total = parts.reduce((a, p) => a + p.total, 0)
+  let total = parts.reduce((a, p) => a + p.total, 0)
 
   // 前端过滤：上传状态 / 发布态 / 关键字兜底
   if (filter.status) rows = rows.filter((r) => r.status === filter.status)
-  if (filter.publishedOnly) rows = rows.filter((r) => r.published)
+  if (filter.publishedOnly !== undefined) rows = rows.filter((r) => r.published === filter.publishedOnly)
   if (kw) {
     const k = kw.toLowerCase()
     rows = rows.filter((r) => r.name.toLowerCase().includes(k) || r.uploader.toLowerCase().includes(k))
   }
   rows.sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')))
-  return { rows: rows.slice(0, pageSize), total }
+  if (clientFiltered) total = rows.length
+  return { rows: rows.slice((pageIndex - 1) * pageSize, pageIndex * pageSize), total }
 }
 
 /* ---------------- 服务地址 ---------------- */

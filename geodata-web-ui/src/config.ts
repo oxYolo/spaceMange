@@ -7,6 +7,9 @@ export interface UrlConfig {
   baseUrl: string
   /** whulri 基座服务（whulri-system，行政区划 /region 等）地址前缀 */
   baseApiUrl: string
+  /** 与基座认证服务配套的 SM2 公钥；正式模式未配置时禁止提交密码。 */
+  authSm2PublicKey?: string
+  authSm2CipherMode?: 0 | 1
   /** .NET IM 服务（SignalR /MessageHub）地址，如 http://127.0.0.1:5000；留空禁用实时进度推送 */
   imUrl: string
   uploadChunkSize: number
@@ -25,6 +28,8 @@ const urlConfig: UrlConfig = (window as any).getUrlConfig
       envName: '开发',
       baseUrl: '/api',
       baseApiUrl: '/base-api',
+      authSm2PublicKey: '',
+      authSm2CipherMode: 1,
       imUrl: '',
       uploadChunkSize: 5 * 1024 * 1024,
       tdtUrl: 'http://t0.tianditu.com',
@@ -34,5 +39,10 @@ const urlConfig: UrlConfig = (window as any).getUrlConfig
       cesiumCenter: [113.9042, 29.7234, 40000] as [number, number, number],
       getTdtToken: () => '',
     }
+
+if (__GEODATA_MOCK__) {
+  urlConfig.envName = '本地 Mock'
+  urlConfig.imUrl = ''
+}
 
 export default urlConfig

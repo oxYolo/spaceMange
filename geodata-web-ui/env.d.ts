@@ -13,3 +13,4 @@ interface Window {
   getUrlConfig: (env: string) => any
   CESIUM_BASE_URL?: string
 }
+declare const __GEODATA_MOCK__: boolean

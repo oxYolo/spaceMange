@@ -16,6 +16,7 @@
  * 「更新状态(已添加到地图)」归地图管理域，均收敛移除。
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHead from '@/components/common/PageHead.vue'
 import Icon from '@/components/common/Icon.vue'
@@ -50,6 +51,7 @@ import { useUserStore } from '@/stores/user'
 import ServicePreview from '@/components/preview/ServicePreview.vue'
 
 const userStore = useUserStore()
+const route = useRoute()
 const USER = userStore.userName || 'admin'
 
 /* ================= 左侧资源目录树（原资源总览） ================= */
@@ -60,6 +62,10 @@ const dictType = ref('')
 const dictOptions = ref<any[]>([])
 const treeMode = ref<'layer' | 'category'>('layer')
 const selectedCatalog = ref('')
+const mobileTreeOpen = ref(false)
+function notifyResourceCountChanged() {
+  window.dispatchEvent(new Event('geodata:resources-changed'))
+}
 
 async function loadDictOptions() {
   try {
@@ -147,11 +153,13 @@ async function applyCategoryCounts() {
 
 function onTreeClick(node: any) {
   selectedCatalog.value = String(node?.id ?? '')
+  mobileTreeOpen.value = false
   pageIndex.value = 1
   loadList()
 }
 function clearTreeFilter() {
   selectedCatalog.value = ''
+  mobileTreeOpen.value = false
   treeRef.value?.setCurrentKey?.(null)
   pageIndex.value = 1
   loadList()
@@ -203,6 +211,7 @@ const total = ref(0)
 const pageSize = ref(10)
 const pageIndex = ref(1)
 const loading = ref(false)
+let listRequestId = 0
 
 const STATUS_OPTS = [
   { value: 'uploading', label: '数据上传中' },
@@ -217,6 +226,7 @@ const PUB_OPTS = [
 ]
 
 async function loadList(silent = false) {
+  const requestId = ++listRequestId
   if (!silent) loading.value = true
   try {
     const res = await loadUnifiedPage(
@@ -225,22 +235,28 @@ async function loadList(silent = false) {
         status: applied.status,
         keyword: applied.kw,
         layerType: applied.catalog,
-        publishedOnly: applied.pub === 'yes' ? true : undefined,
+        publishedOnly: applied.pub === 'yes' ? true : applied.pub === 'no' ? false : undefined,
       },
       pageSize.value,
       pageIndex.value,
     )
+    if (requestId !== listRequestId) return
     let list = res.rows
-    if (applied.pub === 'no') list = list.filter((r) => !r.published)
     if (order.value === 'asc') list = [...list].reverse()
     rows.value = list
     total.value = res.total
     probeRows()
   } catch (e: any) {
-    if (!silent) ElMessage.error(e?.message || '列表加载失败')
+    if (requestId === listRequestId && !silent) {
+      rows.value = []
+      total.value = 0
+      ElMessage.error(e?.message || '列表加载失败')
+    }
   } finally {
-    if (!silent) loading.value = false
-    schedulePoll()
+    if (requestId === listRequestId) {
+      loading.value = false
+      schedulePoll()
+    }
   }
 }
 
@@ -580,6 +596,10 @@ async function submitUpload() {
         if (!exts.includes('shp') || !exts.includes('shx') || !exts.includes('dbf')) {
           throw new Error('SHP 配套文件不完整：请一次多选 .shp + .shx + .dbf（建议含 .prj/.cpg）')
         }
+        if (new Set(exts).size !== exts.length) throw new Error('同一 SHP 文件组中存在重复扩展名，请只选择一组数据')
+        const stems = [file, ...(upload.familyFiles || [])].map((f) => f.name.replace(/\.[^.]+$/, '').toLowerCase())
+        if (new Set(stems).size !== 1) throw new Error('SHP 配套文件必须具有相同的主文件名')
+        if ([file, ...(upload.familyFiles || [])].some((f) => f.size === 0)) throw new Error('SHP 文件组包含空文件')
       }
       const allFiles = [file, ...(upload.familyFiles || [])]
       let merged: any = null
@@ -666,6 +686,7 @@ async function submitUpload() {
     upload.visible = false
     pageIndex.value = 1
     await Promise.all([loadList(), loadTree()])
+    notifyResourceCountChanged()
   } catch (e: any) {
     ElMessage.error(e?.message || '上传失败（上传中断可稍后重试）')
   } finally {
@@ -708,11 +729,13 @@ async function saveEdit() {
 /* ================= 详情（二维 ResourceDetail 抽屉 / 三维增强弹窗） ================= */
 const drawerVisible = ref(false)
 const drawerLayer = ref<any>(null)
+const drawerTab = ref('overview')
 const detail = reactive({ visible: false, row: null as UnifiedRow | null })
 
-function openDetail(row: UnifiedRow) {
+function openDetail(row: UnifiedRow, initialTab = 'overview') {
   if (row.src === 'layer') {
     drawerLayer.value = { ...row.raw, id: row.id }
+    drawerTab.value = initialTab
     drawerVisible.value = true
   } else {
     detail.row = row
@@ -831,6 +854,7 @@ async function removeRow(row: UnifiedRow) {
     else await model3dApi.remove(row.id)
     ElMessage.success('已删除')
     await Promise.all([loadList(), loadTree()])
+    notifyResourceCountChanged()
   } catch (e: any) {
     ElMessage.error(e?.message || '删除失败')
   }
@@ -868,6 +892,7 @@ async function batchDel() {
   ElMessage.success('已删除 ' + ok + ' 条数据')
   picked.value = new Set()
   await Promise.all([loadList(), loadTree()])
+  notifyResourceCountChanged()
 }
 
 /* ================= 预览（三维预览 / 二维已发布预览） ================= */
@@ -953,6 +978,10 @@ onMounted(async () => {
   loadCatalogs()
   loadFormOptions()
   imUnsub = onImMessage(USER, onImMsg)
+  if (route.query.upload === 'raster') {
+    openUpload()
+    upload.typeKey = 'raster'
+  }
 })
 onBeforeUnmount(() => {
   if (pollTimer) window.clearTimeout(pollTimer)
@@ -965,13 +994,14 @@ onBeforeUnmount(() => {
   <div class="manage-page">
     <PageHead title="数据管理" sub="矢量 / 栅格 / 三维数据统一接入：目录树检索、上传、发布与预览全链路">
       <template #tools>
+        <el-button class="btn sm catalog-trigger" @click="mobileTreeOpen = !mobileTreeOpen"><Icon name="tree" :size="13" /> {{ mobileTreeOpen ? '收起目录' : '目录筛选' }}</el-button>
         <el-button class="btn sm primary" @click="openUpload"><Icon name="plus" :size="13" /> 上传数据</el-button>
       </template>
     </PageHead>
 
     <div class="manage-body">
       <!-- 左：资源目录树（原资源总览） -->
-      <div class="card tree-panel">
+      <div class="card tree-panel" :class="{ 'mobile-open': mobileTreeOpen }">
         <div class="tree-tools">
           <el-select
             v-model="dictType"
@@ -1034,7 +1064,7 @@ onBeforeUnmount(() => {
             </el-select>
             <el-input
               v-model="filters.kw"
-              placeholder="请输入数据名称/上传人"
+              placeholder="请输入数据名称"
               clearable
               style="width: 200px"
               @keyup.enter="doSearch"
@@ -1111,7 +1141,7 @@ onBeforeUnmount(() => {
                 <span v-else class="muted">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="272" fixed="right">
+            <el-table-column label="操作" width="318" fixed="right">
               <template #default="{ row }: any">
                 <!-- 二维 -->
                 <template v-if="row.src === 'layer'">
@@ -1134,6 +1164,8 @@ onBeforeUnmount(() => {
                   <span class="op-sep">|</span>
                   <el-button class="op" link type="primary" size="small" @click="openDetail(row)">详情</el-button>
                   <span class="op-sep">|</span>
+                  <el-button v-if="row.typeKey === 'vector'" class="op" link type="primary" size="small" @click="openDetail(row, 'data')">属性</el-button>
+                  <span v-if="row.typeKey === 'vector'" class="op-sep">|</span>
                   <el-button class="op" link type="primary" size="small" @click="openPublish(row)">
                     {{ publishLabel(row) }}
                   </el-button>
@@ -1180,11 +1212,37 @@ onBeforeUnmount(() => {
               <el-empty description="暂无数据（请确认后端 geodata-service 已启动并已建库）" :image-size="80" />
             </template>
           </el-table>
+          <div v-loading="loading" class="mobile-list">
+            <div v-for="row in rows" :key="row.key" class="mobile-record">
+              <div class="mobile-record-head">
+                <button class="mobile-name" type="button" @click="openDetail(row)">{{ row.name }}</button>
+                <span class="tag" :class="row.published ? 'green' : 'gray'">{{ row.published ? '已发布' : '未发布' }}</span>
+              </div>
+              <div class="mobile-record-meta">
+                <span>{{ row.typeLabel }} · {{ row.format }}</span>
+                <span>{{ row.size }}</span>
+                <span>{{ fmtTimeCol(row.time) }}</span>
+                <span class="status" :class="statusClass(row)"><i class="d"></i>{{ row.statusLabel }}</span>
+              </div>
+              <div v-if="svcInfo[row.key]?.formats?.length" class="mobile-service">服务：{{ svcInfo[row.key].formats.join(' / ') }}</div>
+              <div class="mobile-actions">
+                <el-button v-if="row.src === 'layer' && row.typeKey === 'vector'" link type="primary" @click="openDetail(row, 'data')">属性</el-button>
+                <el-button v-if="row.src === 'layer'" link type="primary" @click="openPublish(row)">{{ publishLabel(row) }}</el-button>
+                <el-button v-else-if="canPublish(row)" link type="primary" @click="openPublish(row)">{{ publishLabel(row) }}</el-button>
+                <el-button v-if="row.published" link type="primary" @click="copySvcAddr(row)">复制地址</el-button>
+                <el-button v-if="row.src === 'm3d' && row.published" link type="primary" @click="openPreview(row)">预览</el-button>
+                <el-button v-if="row.src === 'layer'" link type="primary" @click="openEdit(row)">编辑</el-button>
+                <el-button link type="danger" @click="removeRow(row)">删除</el-button>
+              </div>
+            </div>
+            <el-empty v-if="!loading && !rows.length" description="暂无数据" :image-size="64" />
+          </div>
           <div v-if="batchVisible" class="batch-bar">
             <span>已选择 <b>{{ batchCount }}</b> 项</span>
             <el-button class="btn sm danger" @click="batchDel">批量删除</el-button>
           </div>
           <div class="pager">
+            <span class="mobile-total">共 {{ total }} 条</span>
             <el-pagination
               v-model:current-page="pageIndex"
               v-model:page-size="pageSize"
@@ -1201,7 +1259,7 @@ onBeforeUnmount(() => {
     </div>
 
     <!-- 上传数据（右侧抽屉，全量字段） -->
-    <el-drawer v-model="upload.visible" title="上传数据" size="560px" :close-on-click-modal="false">
+    <el-drawer v-model="upload.visible" title="上传数据" size="min(560px, 100vw)" :close-on-click-modal="false">
       <div class="dlg-body">
         <div class="grid2">
           <div class="field">
@@ -1443,7 +1501,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <!-- 数据详情（二维六页签抽屉，复用原资源总览组件） -->
-    <ResourceDetail v-model="drawerVisible" :layer="drawerLayer" initial-tab="overview" @changed="loadList" />
+    <ResourceDetail v-model="drawerVisible" :layer="drawerLayer" :initial-tab="drawerTab" @changed="loadList" />
 
     <!-- 全屏预览 -->
     <ServicePreview v-model="previewVisible" :row="previewRow" />
@@ -1463,6 +1521,9 @@ onBeforeUnmount(() => {
   gap: 12px;
   min-height: 0;
 }
+.catalog-trigger,
+.mobile-list,
+.mobile-total { display: none; }
 
 /* ---------- 左：目录树 ---------- */
 .tree-panel {
@@ -1554,6 +1615,53 @@ onBeforeUnmount(() => {
   padding: 10px 8px;
   display: flex;
   justify-content: flex-end;
+}
+@media (max-width: 900px) {
+  .catalog-trigger { display: inline-flex; }
+  .manage-body {
+    overflow-y: auto;
+    flex-direction: column;
+  }
+  .tree-panel {
+    display: none;
+    width: 100%;
+    flex: none;
+    max-height: 260px;
+  }
+  .tree-panel.mobile-open { display: flex; }
+  .list-col { flex: none; }
+  .table-card { min-height: 420px; }
+}
+@media (max-width: 700px) {
+  .manage-page { height: auto; min-height: 100%; }
+  .manage-body { overflow: visible; }
+  .filter-card { padding: 12px 12px 2px; }
+  .filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .filters :deep(.el-select),
+  .filters :deep(.el-input) { width: 100% !important; min-width: 0; }
+  .table-card { min-height: 0; padding: 0; overflow: hidden; }
+  .table-card > :deep(.el-table) { display: none; }
+  .mobile-list { display: block; padding: 9px; min-height: 180px; }
+  .mobile-record {
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: #fff;
+  }
+  .mobile-record + .mobile-record { margin-top: 9px; }
+  .mobile-record-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .mobile-name { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer; }
+  .mobile-name:hover { color: var(--primary); }
+  .mobile-record-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; margin-top: 8px; color: var(--ink-3); font-size: 11.5px; }
+  .mobile-service { margin-top: 7px; color: var(--ink-2); font-size: 11.5px; }
+  .mobile-actions { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .mobile-actions :deep(.el-button) { margin: 0; padding: 0; font-size: 12px; }
+  .table-card .pager { justify-content: space-between; align-items: center; padding: 6px 12px 10px; border-top: 1px solid var(--line); }
+  .mobile-total { display: inline; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+  .table-card .pager :deep(.el-pagination__sizes),
+  .table-card .pager :deep(.el-pagination__total) { display: none; }
+  .batch-bar { display: none; }
+  .grid2 { grid-template-columns: 1fr; }
 }
 .row-link {
   color: var(--ink);

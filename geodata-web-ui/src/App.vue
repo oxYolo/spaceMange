@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { useRoute } from 'vue-router'
 import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
+const route = useRoute()
 </script>
 
 <template>
-  <ConsoleLayout />
+  <router-view v-if="route.path === '/login'" />
+  <ConsoleLayout v-else />
 </template>
