@@ -28,6 +28,7 @@ export interface NavGroup {
 /** 主导航：数据管理（含服务运维）/ 地图管理（Map+MapRelation 域）/ 图层配置（目录维护与挂载） */
 export const NAV_MAIN: NavMainItem[] = [
   { id: 'manage', name: '数据管理', route: '/manage', icon: 'layers' },
+  { id: 'raster', name: '栅格数据', route: '/manage/raster', icon: 'db' },
   { id: 'maps', name: '地图管理', route: '/maps', icon: 'globe2' },
   { id: 'layers', name: '图层配置', route: '/layers', icon: 'tree' },
 ]

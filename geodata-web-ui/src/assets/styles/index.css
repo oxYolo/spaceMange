@@ -445,3 +445,15 @@ code {
 .el-card {
   --el-card-border-color: var(--line);
 }
+
+@media (max-width: 700px) {
+  .view { padding: 10px 10px 18px; }
+  .crumb { padding: 0 10px; }
+  .el-dialog {
+    width: calc(100vw - 24px) !important;
+    max-height: calc(100vh - 48px);
+    margin: 24px auto !important;
+    overflow: auto;
+  }
+  .el-drawer__body { padding: 12px; }
+}

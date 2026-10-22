@@ -1,4 +1,6 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
+import { getToken } from '@/auth/session'
+import { useUserStore } from '@/stores/user'
 
 /**
  * 路由表
@@ -8,6 +10,7 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
  *  - /catalog/type 数据分类 → 下线，目录维护统一在 /layers 图层配置（同 sdms_datatype CRUD 重复）。
  */
 export const routes: RouteRecordRaw[] = [
+  { path: '/login', name: 'Login', component: () => import('@/views/login/LoginView.vue'), meta: { title: '账户登录' } },
   { path: '/', redirect: '/manage' },
 
   // ★ 主导航 · 数据管理（合并 layerContent 矢量/栅格 + model3d 三维 + 服务管理，上传/发布/服务运维全链路）
@@ -16,6 +19,12 @@ export const routes: RouteRecordRaw[] = [
     name: 'DataManage',
     component: () => import('@/views/manage/index.vue'),
     meta: { title: '数据管理', domain: '数据管理' },
+  },
+  {
+    path: '/manage/raster',
+    name: 'RasterManage',
+    component: () => import('@/views/raster/index.vue'),
+    meta: { title: '栅格数据管理', domain: '数据管理' },
   },
   // ★ 主导航 · 图层配置（目录树 + 已发布服务挂载）
   {
@@ -104,6 +113,25 @@ const router = createRouter({
   scrollBehavior() {
     return { top: 0 }
   },
+})
+
+router.beforeEach(async (to) => {
+  const token = getToken()
+  if (to.path === '/login') {
+    return token ? '/manage' : true
+  }
+  if (!token) return { path: '/login', query: { redirect: to.fullPath } }
+
+  const user = useUserStore()
+  if (!user.profileLoaded) {
+    try {
+      await user.loadProfile()
+    } catch {
+      user.clearSession()
+      return { path: '/login', query: { redirect: to.fullPath } }
+    }
+  }
+  return true
 })
 
 export default router

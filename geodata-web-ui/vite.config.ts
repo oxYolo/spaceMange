@@ -5,14 +5,18 @@ import vueJsx from '@vitejs/plugin-vue-jsx'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
+import { localMockPlugin } from './mock/server'
 
 /** 后端 geodata-service 地址（可通过环境变量 GEODATA_API 覆盖） */
 const API_TARGET = process.env.GEODATA_API || 'http://localhost:8982'
 /** whulri 基座 whulri-system 地址（行政区划 /region 等，可通过 BASE_API 覆盖） */
 const BASE_API_TARGET = process.env.BASE_API || 'http://localhost:9201'
 
-export default defineConfig(() => ({
+export default defineConfig(({ command }) => {
+  const mockEnabled = command === 'serve' && process.env.GEODATA_MOCK !== '0'
+  return {
   base: '/',
+  define: { __GEODATA_MOCK__: JSON.stringify(mockEnabled) },
   server: {
     port: 9200,
     open: true,
@@ -34,6 +38,7 @@ export default defineConfig(() => ({
     },
   },
   plugins: [
+    ...(mockEnabled ? [localMockPlugin()] : []),
     vue(),
     vueJsx(),
     AutoImport({
@@ -69,4 +74,5 @@ export default defineConfig(() => ({
       },
     },
   },
-}))
+  }
+})

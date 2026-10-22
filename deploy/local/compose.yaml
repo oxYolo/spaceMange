@@ -1,0 +1,122 @@
+name: geodata-local
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_DB: geodata_manage
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/local/.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../../sql/geodata_manage_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../../sql/model3d_schema.sql:/docker-entrypoint-initdb.d/02-model3d.sql:ro
+      - ../../sql/patch_20261014_missing_tables_and_seed.sql:/docker-entrypoint-initdb.d/03-patch.sql:ro
+      - ../../sql/patch_20261015_style_text.sql:/docker-entrypoint-initdb.d/04-style.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d geodata_manage"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:?set RABBITMQ_USER in deploy/local/.env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in deploy/local/.env}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-06T17-38-46Z
+    command: server /data --console-address :9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER:?set MINIO_USER in deploy/local/.env}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:?set MINIO_PASSWORD in deploy/local/.env}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  geoserver:
+    image: docker.osgeo.org/geoserver:2.27.0
+    platform: linux/amd64
+    volumes:
+      - geoserver_data:/opt/geoserver_data
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  api:
+    image: geodata-web:local
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: deploy/geodata-web.Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/local/.env}
+      RABBITMQ_USER: ${RABBITMQ_USER:?set RABBITMQ_USER in deploy/local/.env}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?set RABBITMQ_PASSWORD in deploy/local/.env}
+      MINIO_USER: ${MINIO_USER:?set MINIO_USER in deploy/local/.env}
+      MINIO_PASSWORD: ${MINIO_PASSWORD:?set MINIO_PASSWORD in deploy/local/.env}
+      DRUID_PASSWORD: ${DRUID_PASSWORD:?set DRUID_PASSWORD in deploy/local/.env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      geoserver:
+        condition: service_started
+    volumes:
+      - api_uploads:/app/geodata/UploadFile
+      - api_downloads:/app/geodata/Download
+      - api_thumbnails:/app/geodata/Thumbnail
+      - api_data:/app/geodata/Data
+      - api_style:/app/geodata/Style
+      - api_logs:/app/geodata/logs
+      - api_convert:/tmp/geodata-convert
+    ports:
+      - "127.0.0.1:8982:8982"
+
+  builder:
+    image: maven:3.9-eclipse-temurin-17
+    profiles: ["build"]
+    working_dir: /src
+    command: ["mvn", "-B", "-Dmaven.repo.local=/m2", "-pl", "geodata-web", "-am", "clean", "package", "-DskipTests"]
+    volumes:
+      - ../..:/src
+      - maven_cache:/m2
+
+volumes:
+  postgres_data:
+  minio_data:
+  geoserver_data:
+  api_uploads:
+  api_downloads:
+  api_thumbnails:
+  api_data:
+  api_style:
+  api_logs:
+  api_convert:
+  maven_cache:

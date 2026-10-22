@@ -42,12 +42,15 @@ const visible = computed({
 
 const tab = ref(props.initialTab || 'overview')
 watch(
-  () => [props.modelValue, props.initialTab],
+  () => [props.modelValue, props.initialTab, props.layer?.id],
   () => {
     if (props.modelValue) {
-      tab.value = props.initialTab || 'overview'
+      const nextTab = props.initialTab || 'overview'
+      const tabChanged = tab.value !== nextTab
+      tab.value = nextTab
       resetPanels()
       refreshDetail()
+      if (!tabChanged) loadActiveTab(nextTab)
     }
   },
 )
@@ -68,7 +71,7 @@ const overviewMapRef = ref()
 const attrMapRef = ref()
 const detail = ref<any>({})
 
-const bbox = computed(() => parseBBox(props.layer?.layerBBox))
+const bbox = computed(() => parseBBox(detail.value?.layerBBox || props.layer?.layerBBox))
 
 function resetPanels() {
   detail.value = { ...(props.layer || {}) }
@@ -113,13 +116,32 @@ async function loadAttrs() {
   // 普通分页 = 无筛选条件（同步清理导出携带的查询条件）
   lastAttrQuery.value = {}
   try {
-    // 返回 Result<PagedResultOutput>；分页参数为 pageSize / pageIndex
-    const res = await layerContentApi.getAttrtableByLayerId(props.layer.id, attrPage.size, attrPage.index)
-    const rows = pickList<any>(res)
+    // 该端点的 items 实际为 JSON 字符串（每项内是记录数组），兼容对象数组返回。
+    let res: any = null
+    try {
+      res = await layerContentApi.getAttrtableByLayerId(props.layer.id, attrPage.size, attrPage.index)
+    } catch {
+      // 旧接口按固定 "Name" 字段去重，部分 SHP 没有该字段时改读通用属性表接口。
+    }
+    let rows = pickList<any>(res).flatMap((item) => {
+      if (typeof item !== 'string') return item && typeof item === 'object' ? [item] : []
+      try {
+        const parsed = JSON.parse(item)
+        return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.data) ? parsed.data : []
+      } catch { return [] }
+    })
+    let fallbackTotal = 0
+    if (!rows.length) {
+      const raw = await layerContentApi.getLayerAttrTabledDetail(props.layer.id, attrPage.size, attrPage.index)
+      const obj = typeof raw === 'string' ? JSON.parse(raw) : raw
+      const data = typeof obj?.DataTableJson === 'string' ? JSON.parse(obj.DataTableJson) : obj?.DataTableJson
+      rows = Array.isArray(data?.data) ? data.data : Array.isArray(data) ? data : []
+      fallbackTotal = Number(obj?.TotalCount ?? obj?.totalCount ?? 0)
+    }
     attrs.value = rows
-    attrTotal.value = pickTotal(res, rows.length)
+    attrTotal.value = fallbackTotal || pickTotal(res, rows.length)
     const first = rows[0]
-    if (first && typeof first === 'object') attrColumns.value = Object.keys(first)
+    if (first && typeof first === 'object') attrColumns.value = Object.keys(first).filter((key) => !/^geom(new)?$/i.test(key))
     else if (fields.value.length) attrColumns.value = fields.value.map((f) => f.attributeName ?? f.fieldName ?? f.name)
   } catch (e: any) {
     attrs.value = []
@@ -1186,13 +1208,15 @@ async function loadLogs() {
 }
 
 /* ---------------- 页签切换加载 ---------------- */
-watch(tab, (t) => {
+function loadActiveTab(t: string) {
   if (!props.layer) return
   if (t === 'overview') loadOverview()
   if (t === 'data') {
     if (isRaster.value) loadRasterInfo()
-    else loadFields()
-    loadAttrs()
+    else {
+      loadFields()
+      loadAttrs()
+    }
   }
   if (t === 'schema') loadAttrTableDetail()
   if (t === 'style') {
@@ -1207,31 +1231,24 @@ watch(tab, (t) => {
   }
   if (t === 'meta') loadMeta()
   if (t === 'activity') loadLogs()
-})
+}
+
+watch(tab, loadActiveTab)
 
 function loadOverview() {
   const b = bbox.value
   if (b) setTimeout(() => overviewMapRef.value?.fitExtent(b), 300)
 }
 
-watch(
-  () => props.layer,
-  () => {
-    if (props.layer) {
-      resetPanels()
-      if (tab.value === 'overview') loadOverview()
-    }
-  },
-)
 </script>
 
 <template>
-  <el-drawer v-model="visible" size="760px" :with-header="false" destroy-on-close>
+  <el-drawer v-model="visible" size="min(760px, 100vw)" :with-header="false" destroy-on-close>
     <div v-if="layer" class="detail">
       <div class="d-head">
         <div class="dh-main">
           <div class="dh-title">
-            {{ layer.layerName }}
+            {{ detail.layerName || layer.layerName }}
             <span class="tag" :class="isRaster ? 'orange' : 'blue'">{{ layerTypeName(layer.dataType) }}</span>
             <span class="tag" :class="String(layer.publishStatus) === '1' ? 'green' : 'gray'">
               {{ String(layer.publishStatus) === '1' ? '已发布' : '未发布' }}
@@ -1249,17 +1266,22 @@ watch(
         <!-- 概览 -->
         <el-tab-pane label="概览" name="overview">
           <div class="kv mb8">
-            <span class="k">资源名称</span><span class="v">{{ layer.layerName }}</span>
+            <span class="k">资源名称</span><span class="v">{{ detail.layerName || layer.layerName }}</span>
             <span class="k">类型</span><span class="v">{{ layerTypeName(layer.dataType) }}</span>
-            <span class="k">所属分类</span><span class="v">{{ layer.layerTypeName || layer.layerType || '-' }}</span>
-            <span class="k">空间参考</span><span class="v">{{ layer.layerRefenceName || layer.layerRefence || '-' }}</span>
-            <span class="k">空间表</span><span class="v mono">{{ layer.layerSpatialTable || '-' }}</span>
-            <span class="k">属性表</span><span class="v mono">{{ layer.layerAttrTable || '-' }}</span>
-            <span class="k">四至</span><span class="v mono">{{ layer.layerBBox || '-' }}</span>
-            <span class="k">文件大小</span><span class="v">{{ fmtSize(layer.fileSize) }}</span>
+            <span class="k">所属分类</span><span class="v">{{ detail.layerTypeName || detail.layerType || '-' }}</span>
+            <span class="k">空间参考</span><span class="v">{{ detail.layerRefenceName || detail.layerRefence || '-' }}</span>
+            <span class="k">空间表</span><span class="v mono">{{ detail.layerSpatialTable || detail.layerspatialtable || '-' }}</span>
+            <span class="k">属性表</span><span class="v mono">{{ detail.layerAttrTable || '-' }}</span>
+            <span class="k">四至</span><span class="v mono">{{ detail.layerBBox || '-' }}</span>
+            <span class="k">文件大小</span><span class="v">{{ fmtSize(Number(detail.fileSize || 0) * 1024) }}</span>
+            <template v-if="isRaster">
+              <span class="k">源文件</span><span class="v mono">{{ detail.uploadFileName?.split(/[\\/]/).pop() || '-' }}</span>
+              <span class="k">波段数</span><span class="v">{{ detail.rasterCount ?? '-' }}</span>
+              <span class="k">像元类型</span><span class="v">{{ detail.rasterDatatype || '-' }}</span>
+            </template>
             <span class="k">上传状态</span><span class="v">{{ layer.uploadStatus === '1' || layer.uploadStatus === 1 ? '已入库' : '未入库' }}</span>
             <span class="k">创建人 / 时间</span><span class="v">{{ layer.createBy || '-' }} · {{ fmtTime(layer.createDT) }}</span>
-            <span class="k">描述</span><span class="v">{{ layer.layerDesc || '-' }}</span>
+            <span class="k">描述</span><span class="v">{{ detail.layerDesc || '-' }}</span>
           </div>
           <div class="map-box">
             <Map2D ref="overviewMapRef" :zoom="12" :center="bbox ? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2] : [113.9042, 29.7234]" />
@@ -1267,7 +1289,7 @@ watch(
         </el-tab-pane>
 
         <!-- 数据与要素 -->
-        <el-tab-pane label="数据与要素" name="data">
+        <el-tab-pane :label="isRaster ? '栅格详情' : '数据与要素'" name="data">
           <template v-if="isRaster">
             <div class="card">
               <div class="card-h">
@@ -1276,8 +1298,8 @@ watch(
               </div>
               <div class="card-b">
                 <div v-if="rasterInfo" class="kv">
-                  <span class="k">列数 xsize</span><span class="v">{{ rasterInfo.xsize ?? '-' }}</span>
-                  <span class="k">行数 ysize</span><span class="v">{{ rasterInfo.ysize ?? '-' }}</span>
+                  <span class="k">列数 xsize</span><span class="v">{{ rasterInfo.xsize ?? rasterInfo.width ?? '-' }}</span>
+                  <span class="k">行数 ysize</span><span class="v">{{ rasterInfo.ysize ?? rasterInfo.height ?? '-' }}</span>
                   <span class="k">像元 xCell</span><span class="v">{{ rasterInfo.xCell ?? '-' }} 米</span>
                   <span class="k">像元 yCell</span><span class="v">{{ rasterInfo.yCell ?? '-' }} 米</span>
                 </div>
@@ -1298,7 +1320,7 @@ watch(
               <div class="card-b">
                 <div class="kv">
                   <span class="k">极值</span>
-                  <span class="v mono">min = {{ rasterStats.min || '-' }} ／ max = {{ rasterStats.max || '-' }}</span>
+                  <span class="v mono">min = {{ rasterStats.min ?? '-' }} ／ max = {{ rasterStats.max ?? '-' }}</span>
                   <span class="k">唯一值</span>
                   <span class="v mono">{{ rasterStats.values.length ? rasterStats.values.slice(0, 20).join(' , ') : '—' }}</span>
                 </div>
@@ -1357,9 +1379,9 @@ watch(
             </div>
           </template>
 
-          <div class="card">
-            <div class="card-h">
-              属性表<span class="cnt">{{ attrTotal }}</span>
+          <div v-if="!isRaster" class="card">
+            <div class="card-h attr-card-head">
+              <span class="attr-card-title">属性表 <span class="cnt">{{ attrTotal }}</span></span>
               <div class="tools">
                 <el-button class="btn xs" @click="startDraw('Box')">框选</el-button>
                 <el-button class="btn xs" @click="startDraw('Circle')">圈选</el-button>
@@ -1425,7 +1447,7 @@ watch(
         </el-tab-pane>
 
         <!-- 表结构（原始属性表） -->
-        <el-tab-pane label="表结构" name="schema">
+        <el-tab-pane v-if="!isRaster" label="表结构" name="schema">
           <div class="card">
             <div class="card-h">
               原始属性表<span class="cnt">/layerContent/GetLayerAttrTabledDetail</span>
@@ -1909,6 +1931,10 @@ watch(
 .map-box.sm {
   height: 220px;
 }
+.attr-card-head { flex-wrap: wrap; }
+.attr-card-title { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.attr-card-head .tools { flex: 1 1 100%; margin-left: 0; flex-wrap: wrap; }
+.attr-card-head .tools :deep(.el-button) { margin: 0; }
 .pager {
   display: flex;
   justify-content: flex-end;
