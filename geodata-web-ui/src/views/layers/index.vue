@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 图层配置（#/layers）—— 对齐 docs/低空监管数据中台-数据管理原型.html
  *
@@ -21,7 +22,7 @@ import Icon from '@/components/common/Icon.vue'
 import { DATA_TYPES, loadUnifiedPage, type UnifiedRow } from '@/utils/datasets'
 import { dataTypeApi, layerContentApi } from '@/api'
 import ServicePreview from '@/components/preview/ServicePreview.vue'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 /* ---------------- 左侧目录树 ---------------- */
 interface TreeNode {
@@ -70,7 +71,7 @@ async function loadTree() {
     await applyCounts()
   } catch (e: any) {
     tree.value = []
-    ElMessage.error(e?.message || '目录树加载失败')
+    showError(e, '目录树加载失败')
   } finally {
     treeLoading.value = false
   }
@@ -142,7 +143,7 @@ async function saveDir() {
     dirDlg.visible = false
     await loadTree()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   }
 }
 
@@ -163,7 +164,7 @@ async function removeDir(n: TreeNode) {
     ElMessage.success('目录已删除')
     await Promise.all([loadTree(), loadServices()])
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   }
 }
 function countAll(n: TreeNode): number {
@@ -188,7 +189,7 @@ async function moveDir(n: TreeNode, dir: -1 | 1) {
     ElMessage.success('排序已更新')
     await loadTree()
   } catch (e: any) {
-    ElMessage.error(e?.message || '排序失败')
+    showError(e, '排序失败')
   }
 }
 function findSiblings(nodes: TreeNode[], id: string): TreeNode[] {
@@ -238,7 +239,7 @@ async function loadServices() {
     layPicked.value = new Set()
     await loadDirNames()
   } catch (e: any) {
-    ElMessage.error(e?.message || '服务列表加载失败')
+    showError(e, '服务列表加载失败')
   } finally {
     loading.value = false
   }
@@ -317,7 +318,7 @@ async function applyPick() {
     )
     await Promise.all([loadTree(), loadServices()])
   } catch (e: any) {
-    ElMessage.error(e?.message || '挂载失败')
+    showError(e, '挂载失败')
   }
 }
 
@@ -327,7 +328,7 @@ async function unmount(row: UnifiedRow) {
     ElMessage.success('已移出目录')
     await Promise.all([loadTree(), loadServices()])
   } catch (e: any) {
-    ElMessage.error(e?.message || '移出失败')
+    showError(e, '移出失败')
   }
 }
 
@@ -380,15 +381,15 @@ onMounted(async () => {
             <template v-for="n in tree" :key="n.id">
               <div class="tnode">
                 <div class="trow" :class="{ sel: selectedDir?.id === n.id }" @click="selectDir(n)">
-                  <span class="caret" :class="{ open: !collapsed[n.id] }" @click.stop="collapsed[n.id] = !collapsed[n.id]">▶</span>
+                  <button class="caret" :class="{ open: !collapsed[n.id] }" type="button" :aria-label="`${collapsed[n.id] ? '展开' : '收起'}目录 ${n.name}`" :aria-expanded="!collapsed[n.id]" @click.stop="collapsed[n.id] = !collapsed[n.id]"><Icon name="chevron-right" :size="13" /></button>
                   <Icon name="tag" :size="13" />
                   <span class="tname" :title="n.name">{{ n.name }}</span>
                   <span v-if="n.count" class="tcnt">{{ n.count }}</span>
                   <span class="tacts">
-                    <button class="tact" title="上移" @click.stop="moveDir(n, -1)">↑</button>
-                    <button class="tact" title="下移" @click.stop="moveDir(n, 1)">↓</button>
-                    <button class="tact" title="重命名" @click.stop="openRenameDir(n)">✎</button>
-                    <button class="tact del" title="删除目录" @click.stop="removeDir(n)">✕</button>
+                    <button class="tact" title="上移" aria-label="上移目录" @click.stop="moveDir(n, -1)"><Icon name="arrow-up" :size="13" /></button>
+                    <button class="tact" title="下移" aria-label="下移目录" @click.stop="moveDir(n, 1)"><Icon name="arrow-down" :size="13" /></button>
+                    <button class="tact" title="重命名" aria-label="重命名目录" @click.stop="openRenameDir(n)"><Icon name="edit" :size="13" /></button>
+                    <button class="tact del" title="删除目录" aria-label="删除目录" @click.stop="removeDir(n)"><Icon name="x" :size="13" /></button>
                   </span>
                 </div>
                 <div v-if="n.children.length && !collapsed[n.id]" class="tchildren">
@@ -403,8 +404,8 @@ onMounted(async () => {
                     <span class="tname" :title="c.name">{{ c.name }}</span>
                     <span v-if="c.count" class="tcnt">{{ c.count }}</span>
                     <span class="tacts">
-                      <button class="tact" title="重命名" @click.stop="openRenameDir(c)">✎</button>
-                      <button class="tact del" title="删除目录" @click.stop="removeDir(c)">✕</button>
+                      <button class="tact" title="重命名" aria-label="重命名目录" @click.stop="openRenameDir(c)"><Icon name="edit" :size="13" /></button>
+                      <button class="tact del" title="删除目录" aria-label="删除目录" @click.stop="removeDir(c)"><Icon name="x" :size="13" /></button>
                     </span>
                   </div>
                 </div>
@@ -655,10 +656,14 @@ onMounted(async () => {
 .caret {
   width: 13px;
   flex: 0 0 13px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #9aa5b5;
-  font-size: 8px;
+  cursor: pointer;
   transition: transform 0.15s;
-  text-align: center;
 }
 .caret.open {
   transform: rotate(90deg);

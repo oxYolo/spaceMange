@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 字典管理（系统）
  * 后端：DicDataTypeController（5 端点）：GetAllList / Insert / Update / Delete
@@ -30,7 +31,7 @@ async function loadTypes() {
       codeList.value = []
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    showError(e, '加载失败')
   } finally {
     typeLoading.value = false
   }
@@ -48,7 +49,7 @@ async function loadCodes() {
     codeList.value = pickList(res)
     codeKeyword.value = ''
   } catch (e: any) {
-    ElMessage.error(e?.message || '字典项加载失败')
+    showError(e, '字典项加载失败')
   } finally {
     codeLoading.value = false
   }
@@ -70,7 +71,7 @@ async function searchCodes() {
     const res = await dictApi.codeByConn(selectedId.value, kw)
     codeList.value = pickList(res)
   } catch (e: any) {
-    ElMessage.error(e?.message || '搜索失败')
+    showError(e, '搜索失败')
   } finally {
     codeLoading.value = false
   }
@@ -121,7 +122,7 @@ async function saveType() {
     typeDialog.visible = false
     await loadTypes()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     typeLoading.value = false
   }
@@ -147,7 +148,7 @@ async function removeType() {
     codeList.value = []
     await loadTypes()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   } finally {
     typeLoading.value = false
   }
@@ -202,7 +203,7 @@ async function saveCode() {
     codeDialog.visible = false
     await loadCodes()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     codeLoading.value = false
   }
@@ -225,7 +226,7 @@ async function removeCode(row: any) {
     ElMessage.success('删除成功')
     await loadCodes()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   } finally {
     codeLoading.value = false
   }
@@ -238,7 +239,7 @@ onMounted(() => {
 
 <template>
   <div>
-    <PageHead title="字典管理" sub="DicDataTypeController 5 端点 + DicDataCodeController 6 端点">
+    <PageHead title="字典管理" sub="维护数据分类与字典项，为录入和检索提供一致的选项">
       <template #tools>
         <button class="btn" @click="loadTypes"><Icon name="refresh" :size="13" />刷新分类</button>
       </template>

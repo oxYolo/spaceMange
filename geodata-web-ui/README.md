@@ -12,22 +12,20 @@
 ```bash
 cd geodata-web-ui
 npm install            # 依赖
-npm run dev            # http://localhost:9200 （默认启用本地 Mock，无需后端）
+npm run dev            # http://localhost:9200 （请求转发到真实后端）
 npm run build          # 产物 dist/
 npm run type-check     # vue-tsc -p tsconfig.app.json --noEmit
 ```
 
-开发时默认启用本地 Mock：`/api`、`/base-api` 由 Vite 本地处理，示例数据和常见增删改在当前开发服务进程内保存，重启后恢复。矢量 SHP 文件组支持本地分片上传、合并、入库、DBF 属性查看与服务发布流程联调；Mock 仅解析基本几何类型、范围和属性，不代替 GDAL、PostGIS 或 GeoServer。GIS 分析、转换等未模拟的操作返回明确的 501 错误。顶部会显示“本地 Mock”。
+开发时业务路由（例如 `#/manage`）可直接访问，`#/login` 是独立页面，不参与业务路由验证。前端不再提供本地示例数据；后端未启动时，列表和操作会显示请求错误。
 
-矢量 Mock 联调可运行 `node scripts/test-vector-mock.mjs`。测试脚本生成点状 SHP/SHX/DBF 样本，覆盖上传、合并、入库、属性读取和 WMS 发布；需先运行 `npm run dev`。使用真实后端的导入与发布仍需相应后端服务。
-
-现在入口为 `#/login`。Mock 登录账号 `admin`、密码 `admin123`，只供本地界面联调；Mock 不提供真实访问控制。登录后 token 保存在浏览器会话中，勾选“记住账号”只保存账号，不保存密码。退出后会清除会话。截图右上角的输入法工具条属于操作系统，不是页面元素。
-
-连接真实后端时禁用 Mock。业务接口默认 `http://localhost:8982`；登录参考 Flyspace 的 `/auth/dronelogin`、`/system/user/getInfo` 和 `/auth/logout`，走独立的 `whulri-system` 基座服务（默认 `http://localhost:9201`），可用环境变量覆盖：
+业务接口默认经 Vite 的 `/api` 代理转发到 `http://localhost:8982`；认证与基座接口经 `/base-api` 转发到 `http://localhost:9201`。可通过环境变量覆盖目标：
 
 ```bash
-GEODATA_MOCK=0 GEODATA_API=http://localhost:8982 BASE_API=http://localhost:9201 npm run dev
+GEODATA_API=http://localhost:8982 BASE_API=http://localhost:9201 npm run dev
 ```
+
+登录页目前保留独立的接口调用，但不限制业务页访问。登录参考 Flyspace 的 `/auth/dronelogin`、`/system/user/getInfo` 和 `/auth/logout`，依赖单独的 `whulri-system` 基座服务；未启动该服务时无法完成真实登录。
 
 Flyspace 在正式模式对登录密码使用 SM2 加密。此项目没有内置其他系统的公钥；正式对接时必须在 `public/config/urlConfig.js` 填入目标认证服务的 `authSm2PublicKey`，否则登录会明确报错。只启动本仓库的 `geodata-service:8982` 无法完成真实登录，因为它没有上述认证端点。
 
@@ -58,24 +56,25 @@ geodata-web-ui/
 
 ---
 
-## 3. 页面清单（7 大域 / 14 页）
+## 3. 页面清单
 
 | 路由 | 页面 | 对应 Controller |
 |:---|:---|:---|
-| `#/data` | 资源总览（目录树 + 四维筛选 + 6 页签详情抽屉） | LayerContent(36) / LayerField(9) / MetaData(7) |
-| `#/ingest` | 数据接入（通用分片 / SHP 系列） | Upload(2) / KneeCoordinates(2) |
-| `#/model3d` | 三维数据（分片上传 / 转换 / 加载地址 / Cesium 预览） | Model3d(9) |
-| `#/catalog/type` | 数据分类 | DataType(8) |
-| `#/catalog/tag` | 数据标签 | DataTag(6) |
-| `#/catalog/tagrel` | 标签关系 | TagRelation(8) |
-| `#/style` | 样式库 | DataStyle(35) |
-| `#/symbol` | 符号库 | Symbol(6) |
-| `#/publish` | 服务与缓存（发布向导 + 服务预览 + 切片任务） | MapRelation(19) / ServerInterface(2) |
-| `#/tools` | 工具箱（10 类异步工具 + 任务进度 + 成果入库） | LayerTool(13) |
-| `#/tools/topology` | 拓扑检查 | Topology(10) |
-| `#/tasks` | 任务中心 | LayerTool(13) |
-| `#/system/dict` | 字典管理 | DicDataType(5) / DicDataCode(6) |
-| `#/system/log` | 操作日志 | LayerLog(2) |
+| `#/manage` | 数据管理（目录、上传入库、服务发布） | LayerContent / Model3d / ServerInterface |
+| `#/manage/raster` | 栅格管理（影像详情、切片与服务地址） | LayerContent / ServerInterface |
+| `#/layers` | 图层目录及已发布服务挂载 | DataType / LayerContent |
+| `#/maps` | 地图编排与发布 | Map / MapRelation |
+| `#/catalog/tag` | 数据标签 | DataTag |
+| `#/catalog/tagrel` | 标签关系 | TagRelation |
+| `#/style` | 样式库 | DataStyle |
+| `#/symbol` | 符号库 | Symbol |
+| `#/tools` | 工具箱 | LayerTool |
+| `#/tools/topology` | 拓扑检查 | Topology |
+| `#/tasks` | 任务中心 | LayerTool |
+| `#/system/dict` | 字典管理 | DicDataType / DicDataCode |
+| `#/system/log` | 操作日志 | LayerLog |
+
+筛选按后端实际可区分的类型组织：矢量与白模共用矢量入库，栅格与地形共用栅格入库，因此列表合并相应筛选项，避免显示没有实际区分能力的选项。
 
 ---
 
@@ -102,3 +101,24 @@ geodata-web-ui/
 - **三维（Cesium）**：`Map3D.vue` 首次挂载时动态注入 `public/lib/Cesium/Cesium.js`（约 4.4MB），
   控制台其它页面不会加载；`url` 传 `/model3d/{id}/publish-url` 返回的公开地址即可加载 3D Tiles。
 - 天地图 token 取自参考工程 `spatiotemporal-intelligence-front`，可在 `public/config/urlConfig.js` 中替换。
+
+
+## 开发与架构约定
+
+- 登录页、认证接口、用户会话与登录路由集中在 `src/auth/`；业务路由位于 `src/business/routes.ts`，业务路由访问时才加载业务布局。两侧共用请求与错误处理。
+- `npm run check` 执行真实应用/Node 配置类型检查、领域回归测试及生产构建。
+- `npm test` 无需后端，覆盖查询分页/排序、服务缓存、认证会话、任务轮询与上传校验。
+- 页面负责呈现与交互；业务状态、请求编排和操作准入放在 `src/features/`；HTTP 与认证在 `src/api/`、`src/auth/`。已有 `utils/datasets.ts` 保留兼容入口，新增代码优先引用领域模块。
+- 统一使用 `showError(error, fallback)` 处理请求失败；取消和旧会话错误静默，表单校验提示单独处理。
+- 写操作成功后调用 `invalidateDatasets()`；普通进度轮询只失效查询缓存，保留稳定服务地址缓存。
+- 完整分层、缓存规则与产品状态流见 [架构说明](docs/architecture.md)。
+
+## 高级操作
+
+- **Ctrl/Cmd+K**：打开快捷导航，输入中文、英文别名或路径，使用方向键和 Enter 打开页面/上传入口；Esc 关闭。`/` 仍用于全局数据搜索。
+- **快捷筛选**：数据管理中可一键筛未发布、转换中或处理失败；筛选和排序会体现在页面地址中，便于刷新后继续查看。
+- **资源清单与服务地址**：列表的“清单与地址”支持导出当前页或已选资源的 CSV 清单，以及批量复制已发布服务地址。导出的是资源摘要，不是几何数据或完整属性表；不把当前页当全部数据。
+- **服务接入**：在已发布资源的“预览”中选择协议，查看“服务接入”，复制真实地址及 cURL、OpenLayers、GeoJSON 或 Cesium 示例。WMTS/MVT 根据能力文档确定矩阵；WFS 请求最多 1000 条；缺少必要参数时明确说明，示例不会自动执行。
+- **登录页**：仅作为独立页面保留；业务路由不验证登录状态。
+
+接入参考：[OpenLayers WMTS API](https://openlayers.org/en/latest/apidoc/module-ol_source_WMTS.html)、[Cesium Viewer API](https://cesium.com/learn/cesiumjs/ref-doc/Viewer.html)。

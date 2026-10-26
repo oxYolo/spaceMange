@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 拓扑检查（tools/topology）
  * 接口依据：TopologyController(10)
@@ -20,7 +21,7 @@ import Icon from '@/components/common/Icon.vue'
 import { layerContentApi, topologyApi } from '@/api'
 import { pickList } from '@/utils/format'
 import { copyText as clipboardCopy } from '@/utils/clipboard'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 /* ------------------------------ 通用 ------------------------------ */
 const USER = useUserStore().userName
@@ -44,7 +45,7 @@ async function loadLayers() {
   try {
     layerOptions.value = pickList<any>(await layerContentApi.getPageListByName({ createBy: USER }, 50, 1))
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载图层下拉失败')
+    showError(e, '加载图层下拉失败')
   }
 }
 
@@ -245,7 +246,7 @@ async function runAsync() {
     reportTimer = setInterval(pollReport, 2000)
     pollReport()
   } catch (e: any) {
-    ElMessage.error(e?.message || '异步检查提交失败')
+    showError(e, '异步检查提交失败')
   }
 }
 async function pollReport() {
@@ -303,7 +304,7 @@ async function runSync() {
     syncPage.total = syncRows.value.length || Number(res?.totalCount ?? 0)
     syncDone.value = true
   } catch (e: any) {
-    ElMessage.error(e?.message || '同步检查失败')
+    showError(e, '同步检查失败')
   } finally {
     syncLoading.value = false
   }
@@ -393,7 +394,7 @@ async function submitAction() {
     actVisible.value = false
     await loadStatus()
   } catch (e: any) {
-    ElMessage.error(e?.message || '操作失败')
+    showError(e, '操作失败')
   } finally {
     actBusy.value = false
   }
@@ -419,7 +420,7 @@ async function removeTopology() {
     ElMessage.success('拓扑已删除')
     await loadStatus()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   }
 }
 
@@ -432,7 +433,7 @@ onBeforeUnmount(clearReportTimer)
 
 <template>
   <div>
-    <PageHead title="拓扑检查" sub="接口依据：Topology(10)">
+    <PageHead title="拓扑检查" sub="检查空间数据的拓扑关系，定位重叠、缝隙和几何错误">
       <template #tools>
         <button class="btn sm" @click="loadRules"><Icon name="refresh" :size="13" />刷新规则</button>
         <button class="btn sm" @click="loadStatus"><Icon name="eye" :size="13" />刷新状态</button>

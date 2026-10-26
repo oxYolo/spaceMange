@@ -40,9 +40,4 @@ const urlConfig: UrlConfig = (window as any).getUrlConfig
       getTdtToken: () => '',
     }
 
-if (__GEODATA_MOCK__) {
-  urlConfig.envName = '本地 Mock'
-  urlConfig.imUrl = ''
-}
-
 export default urlConfig

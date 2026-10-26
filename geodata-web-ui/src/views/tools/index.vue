@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 工具箱（tools）
  * 接口依据：LayerToolController(13)
@@ -16,7 +17,7 @@ import Icon from '@/components/common/Icon.vue'
 import { layerContentApi, layerToolApi, dataTypeApi, dataStyleApi } from '@/api'
 import { fmtTime, pickList, ORIGIN_NAME } from '@/utils/format'
 import { copyText as clipboardCopy } from '@/utils/clipboard'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 /* ------------------------------ 通用 ------------------------------ */
 const userStore = useUserStore()
@@ -69,7 +70,7 @@ async function loadLayers() {
     const res = await layerContentApi.getPageListByName({ createBy: USER }, 50, 1)
     layerOptions.value = pickList<any>(res)
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载图层下拉失败')
+    showError(e, '加载图层下拉失败')
   }
 }
 function flattenTypes(nodes: any[], out: any[] = []): any[] {
@@ -291,7 +292,7 @@ async function readTifInfo() {
     if (yCell) form.yCell = yCell
     ElMessage.success('已读取栅格极值并填充')
   } catch (e: any) {
-    ElMessage.error(e?.message || '读取栅格信息失败')
+    showError(e, '读取栅格信息失败')
   } finally {
     readingTif.value = false
   }
@@ -352,7 +353,7 @@ async function matrixFromMaxMin() {
     }))
     ElMessage.success(`极值 [${min}, ${max}] 已均分为 ${n} 段`)
   } catch (e: any) {
-    ElMessage.error(e?.message || '读取极值失败')
+    showError(e, '读取极值失败')
   } finally {
     matrixBusy.value = false
   }
@@ -383,7 +384,7 @@ async function matrixFromJenks() {
     }
     ElMessage.success('自然断点已生成')
   } catch (e: any) {
-    ElMessage.error(e?.message || '读取自然断点失败')
+    showError(e, '读取自然断点失败')
   } finally {
     matrixBusy.value = false
   }
@@ -404,7 +405,7 @@ async function matrixFromValues() {
     matrixRows.value = list.slice(0, 30).map((v: number, i: number) => ({ old: String(v), value: String(i + 1) }))
     ElMessage.success(`唯一值已载入 ${matrixRows.value.length} 行`)
   } catch (e: any) {
-    ElMessage.error(e?.message || '读取唯一值失败')
+    showError(e, '读取唯一值失败')
   } finally {
     matrixBusy.value = false
   }
@@ -495,7 +496,7 @@ async function runTask() {
     openProgress(String(taskId ?? ''), a.origin)
     loadTasks()
   } catch (e: any) {
-    ElMessage.error(e?.message || '任务提交失败')
+    showError(e, '任务提交失败')
   } finally {
     running.value = false
   }
@@ -569,7 +570,7 @@ async function doStorage() {
     clearTimer()
     await loadTasks()
   } catch (e: any) {
-    ElMessage.error(e?.message || '成果入库失败')
+    showError(e, '成果入库失败')
   }
 }
 
@@ -584,7 +585,7 @@ async function loadTasks() {
   try {
     tasks.value = pickList<any>(await layerToolApi.getList(10, 1, ''))
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载任务队列失败')
+    showError(e, '加载任务队列失败')
   } finally {
     tasksLoading.value = false
   }
@@ -604,7 +605,7 @@ onBeforeUnmount(clearTimer)
 
 <template>
   <div>
-    <PageHead title="工具箱" sub="接口依据：LayerTool(13)">
+    <PageHead title="工具箱" sub="选择数据并提交空间处理任务，在任务中心跟踪进度与入库成果">
       <template #tools>
         <button class="btn sm" @click="loadLayers"><Icon name="refresh" :size="13" />刷新图层</button>
         <button class="btn sm" @click="loadTasks"><Icon name="list" :size="13" />刷新任务</button>

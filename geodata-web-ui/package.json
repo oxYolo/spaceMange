@@ -7,8 +7,20 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "type-check": "vue-tsc --noEmit",
-    "preview": "vite preview"
+    "type-check": "vue-tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "preview": "vite preview",
+    "test": "npm run test:datasets && npm run test:request-session && npm run test:tasks && npm run test:upload && npm run test:shell && npm run test:raster && npm run test:preview && npm run test:manage && npm run test:workspace && npm run test:integration",
+    "test:datasets": "node scripts/test-datasets.mjs",
+    "test:request-session": "node scripts/test-request-session.mjs",
+    "test:tasks": "node scripts/test-task-domain.mjs && node scripts/test-task-center.mjs",
+    "test:upload": "node scripts/test-upload-validation.mjs && node scripts/test-dataset-upload.mjs",
+    "check": "npm run type-check && npm test && npm run build",
+    "test:shell": "node scripts/test-shell.mjs",
+    "test:raster": "node scripts/test-raster-page.mjs",
+    "test:preview": "node scripts/test-resource-preview.mjs",
+    "test:manage": "node scripts/test-manage-page.mjs",
+    "test:workspace": "node scripts/test-workspace-tools.mjs",
+    "test:integration": "node scripts/test-service-integration.mjs"
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.1",
@@ -37,7 +49,8 @@
     "unplugin-auto-import": "^19.1.2",
     "unplugin-vue-components": "^28.5.0",
     "vite": "^6.2.4",
-    "vue-tsc": "^2.2.8"
+    "vue-tsc": "^2.2.8",
+    "esbuild": "^0.25.12"
   },
   "optionalDependencies": {
     "@esbuild/win32-x64": "^0.25.12",

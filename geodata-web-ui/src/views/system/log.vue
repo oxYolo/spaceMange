@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 操作日志（系统）
  * 后端：LayerLogController（2 端点）
@@ -36,7 +37,7 @@ async function loadLogs() {
     rows.value = pickList(res)
     total.value = pickTotal(res, rows.value.length)
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    showError(e, '加载失败')
   } finally {
     loading.value = false
   }
@@ -109,7 +110,7 @@ async function removeLog(row: any) {
     ElMessage.success('删除成功')
     await loadLogs()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   } finally {
     loading.value = false
   }
@@ -122,7 +123,7 @@ onMounted(() => {
 
 <template>
   <div>
-    <PageHead title="操作日志" sub="LayerLogController · 2 端点（getList 分页 / delete）">
+    <PageHead title="操作日志" sub="查询数据操作记录，追踪处理过程与异常原因">
       <template #tools>
         <button class="btn" @click="refresh"><Icon name="refresh" :size="13" />刷新</button>
         <button class="btn" @click="exportCsv"><Icon name="download" :size="13" />导出 CSV</button>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+type StyleFileEntry = { name: string; path: string }
+import { showError } from '@/utils/feedback'
 /**
  * 样式库 —— DataStyleController（35 端点，全量接通）
  * 关联端点依据：
@@ -32,7 +34,7 @@ import Icon from '@/components/common/Icon.vue'
 import { dataStyleApi, layerContentApi, layerFieldApi, mapRelationApi } from '@/api'
 import { fmtTime, pickList, pickTotal } from '@/utils/format'
 import { isRasterDataType, layerDataTypeName, LAYER_GEOM_IDS } from '@/utils/datasets'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 const userStore = useUserStore()
 
@@ -139,7 +141,7 @@ async function load() {
       current.value = list.value.find((r) => r.id === current.value?.id) || null
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '样式列表加载失败')
+    showError(e, '样式列表加载失败')
   } finally {
     loading.value = false
   }
@@ -544,7 +546,7 @@ async function checkName(showTip = false): Promise<boolean> {
     }
     return true
   } catch (e: any) {
-    ElMessage.error(e?.message || '名称校验失败')
+    showError(e, '名称校验失败')
     return false
   }
 }
@@ -643,7 +645,7 @@ async function save() {
     dialogVisible.value = false
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     saving.value = false
   }
@@ -676,7 +678,7 @@ async function genGraduated() {
     }))
     ElMessage.success(`已生成 ${rules.value.length} 级规则`)
   } catch (e: any) {
-    ElMessage.error(e?.message || '断点读取失败')
+    showError(e, '断点读取失败')
   } finally {
     genLoading.value = false
   }
@@ -707,7 +709,7 @@ async function genUnique() {
     }))
     ElMessage.success(`已生成 ${rules.value.length} 条唯一值规则`)
   } catch (e: any) {
-    ElMessage.error(e?.message || '字段取值读取失败')
+    showError(e, '字段取值读取失败')
   } finally {
     genLoading.value = false
   }
@@ -738,7 +740,7 @@ async function genTifRules() {
     }))
     ElMessage.success(`已生成 ${tifRules.value.length} 级栅格规则`)
   } catch (e: any) {
-    ElMessage.error(e?.message || '栅格断点读取失败')
+    showError(e, '栅格断点读取失败')
   } finally {
     genLoading.value = false
   }
@@ -787,7 +789,7 @@ async function pushGeo(row: any) {
     await dataStyleApi.insertGeoServerStyle({ id: row.id, name: sName(row) })
     ElMessage.success('已推送（接口无返回体）')
   } catch (e: any) {
-    ElMessage.error(e?.message || '推送失败')
+    showError(e, '推送失败')
   } finally {
     pushingId.value = ''
   }
@@ -831,7 +833,7 @@ async function doApply() {
     applyVisible.value = false
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '应用失败')
+    showError(e, '应用失败')
   } finally {
     applying.value = false
   }
@@ -856,7 +858,7 @@ async function openDetail(row: any) {
   try {
     detail.value = await dataStyleApi.getDetailById(row.id)
   } catch (e: any) {
-    ElMessage.error(e?.message || '详情读取失败')
+    showError(e, '详情读取失败')
   } finally {
     detailLoading.value = false
   }
@@ -870,7 +872,7 @@ async function parseSld() {
     detail.value = { ...(detail.value || {}), ...r }
     ElMessage.success('已解析 SLD')
   } catch (e: any) {
-    ElMessage.error(e?.message || '解析失败')
+    showError(e, '解析失败')
   } finally {
     parseLoading.value = false
   }
@@ -915,7 +917,7 @@ async function loadAttrPreview() {
       rows: rowsRaw.map((r: any) => (Array.isArray(r) ? r : cols.map((c) => r?.[c]))),
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '属性分级预览失败')
+    showError(e, '属性分级预览失败')
   } finally {
     attrPreviewLoading.value = false
   }
@@ -938,7 +940,7 @@ async function loadAttrPreviewById() {
     }
     ElMessage.success(`按样式预览：${rowsRaw.length} 组`)
   } catch (e: any) {
-    ElMessage.error(e?.message || '按样式预览失败')
+    showError(e, '按样式预览失败')
   } finally {
     attrPreviewLoading.value = false
   }
@@ -991,7 +993,7 @@ async function onDelete(row: any) {
     if (current.value?.id === row.id) current.value = null
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   }
 }
 /** 批量删除：DeleteById 单条调用，逐条执行 */
@@ -1050,7 +1052,7 @@ async function loadFolders() {
       await loadFiles()
     }
   } catch (e: any) {
-    ElMessage.error(e?.message || '文件夹列表读取失败')
+    showError(e, '文件夹列表读取失败')
   } finally {
     foldersLoading.value = false
   }
@@ -1084,7 +1086,7 @@ async function addFolder() {
     await loadFolders()
     await loadFiles()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e?.message || '新增失败')
+    if (e !== 'cancel') showError(e, '新增失败')
   }
 }
 async function renameFolder(old: string) {
@@ -1102,7 +1104,7 @@ async function renameFolder(old: string) {
     await loadFolders()
     await loadFiles()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e?.message || '重命名失败')
+    if (e !== 'cancel') showError(e, '重命名失败')
   }
 }
 async function deleteFolder(name: string) {
@@ -1124,7 +1126,7 @@ async function deleteFolder(name: string) {
     }
     await loadFolders()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   }
 }
 async function renameFile(f: { name: string; path: string }) {
@@ -1140,7 +1142,7 @@ async function renameFile(f: { name: string; path: string }) {
     ElMessage.success('已重命名')
     await loadFiles()
   } catch (e: any) {
-    if (e !== 'cancel') ElMessage.error(e?.message || '重命名失败')
+    if (e !== 'cancel') showError(e, '重命名失败')
   }
 }
 async function deleteFile(f: { name: string; path: string }) {
@@ -1158,7 +1160,7 @@ async function deleteFile(f: { name: string; path: string }) {
     ElMessage.success('已删除')
     await loadFiles()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   }
 }
 /** 按文件路径解析 SLD：Parsethefile */
@@ -1170,7 +1172,7 @@ async function parseFile(f: { name: string; path: string }) {
     fileParseResult.value = pickList<any>(await dataStyleApi.parsethefile(f.path))
     if (!fileParseResult.value.length) ElMessage.info('未解析到规则（文件不存在或非 SLD）')
   } catch (e: any) {
-    ElMessage.error(e?.message || '解析失败')
+    showError(e, '解析失败')
   }
 }
 
@@ -1212,7 +1214,7 @@ onMounted(() => {
 
 <template>
   <div>
-    <PageHead title="样式库" sub="DataStyleController · 35 端点（编辑器 / 分级规则 / 栅格 / 文件夹 / SLD / GeoServer / 色带）">
+    <PageHead title="样式库" sub="为矢量和栅格配置地图样式，管理分级规则、色带与样式文件">
       <template #tools>
         <button class="btn sm" @click="openFolders"><Icon name="tree" :size="13" />文件夹管理</button>
         <button class="btn sm" @click="load"><Icon name="refresh" :size="13" />刷新</button>
@@ -1740,7 +1742,7 @@ onMounted(() => {
             <div class="card-b" style="padding: 0">
               <el-table :data="attrPreview.rows" size="small" max-height="220">
                 <el-table-column label="色" width="56">
-                  <template #default="{ row }"><span class="sw" :style="{ background: previewRowColor(row) }" /></template>
+                  <template #default="{ row }"><span class="sw" :style="{ background: previewRowColor(row as any[]) }" /></template>
                 </el-table-column>
                 <el-table-column v-for="(c, ci) in attrPreview.columns" :key="c" :label="c" min-width="90">
                   <template #default="{ row }">
@@ -1825,9 +1827,9 @@ onMounted(() => {
             <el-table-column label="操作" width="150">
               <template #default="{ row }">
                 <div class="row" style="gap: 4px">
-                  <button class="btn xs" @click="parseFile(row)">解析</button>
-                  <button class="btn xs" @click="renameFile(row)">重命名</button>
-                  <button class="btn xs danger" @click="deleteFile(row)">删</button>
+                  <button class="btn xs" @click="parseFile(row as StyleFileEntry)">解析</button>
+                  <button class="btn xs" @click="renameFile(row as StyleFileEntry)">重命名</button>
+                  <button class="btn xs danger" @click="deleteFile(row as StyleFileEntry)">删</button>
                 </div>
               </template>
             </el-table-column>

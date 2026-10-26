@@ -3,11 +3,13 @@ defineProps<{ title: string; sub?: string }>()
 </script>
 
 <template>
-  <div class="page-head">
-    <h2>{{ title }}</h2>
-    <span v-if="sub" class="sub">{{ sub }}</span>
-    <div class="tools">
+  <header class="page-head">
+    <div class="page-head-copy">
+      <h1>{{ title }}</h1>
+      <p v-if="sub" class="sub">{{ sub }}</p>
+    </div>
+    <div v-if="$slots.tools" class="tools">
       <slot name="tools" />
     </div>
-  </div>
+  </header>
 </template>

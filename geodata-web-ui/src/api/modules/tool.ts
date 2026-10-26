@@ -1,4 +1,4 @@
-import { http } from '@/api/request'
+import { http, type ReqOptions } from '@/api/request'
 
 /**
  * 图层工具（LayerToolController，13 端点）
@@ -6,8 +6,8 @@ import { http } from '@/api/request'
  */
 export const layerToolApi = {
   /** 异步任务历史 / 轮询状态（按 createDT 倒序） */
-  getList: (pageSize = 10, pageIndex = 1, origin?: string | number) =>
-    http.get<any>('/layerTool/getList', { pageSize, pageIndex, origin }),
+  getList: (pageSize = 10, pageIndex = 1, origin?: string | number, opts?: ReqOptions) =>
+    http.get<any>('/layerTool/getList', { pageSize, pageIndex, origin }, opts),
 
   /** 成果入库到目标目录并上图 */
   storageLayer: (id: string, targetId: string) =>

@@ -7,6 +7,7 @@
  * - 点选拾取 / 框选 / 圈选 / 多边选（供空间查询使用）
  */
 import { onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
+import Icon from '@/components/common/Icon.vue'
 import 'ol/ol.css'
 import Map from 'ol/Map'
 import View from 'ol/View'
@@ -27,9 +28,11 @@ import MVT from 'ol/format/MVT'
 import { createXYZ } from 'ol/tilegrid'
 import Draw, { createBox } from 'ol/interaction/Draw'
 import { fromLonLat, toLonLat, transformExtent } from 'ol/proj'
+import { getDistance } from 'ol/sphere'
 import { Style, Stroke, Fill, Circle as OLCircle, Text } from 'ol/style'
 import { defaults as defaultControls } from 'ol/control'
 import urlConfig from '@/config'
+import { geometryJsonToWkt } from '@/utils/spatial'
 
 const props = withDefaults(
   defineProps<{
@@ -55,6 +58,7 @@ const emit = defineEmits<{
   (e: 'pick', payload: { lon: number; lat: number }): void
   (e: 'drawend', payload: { kind: DrawKind; wkt?: string; lon?: number; lat?: number; radius?: number }): void
   (e: 'moveend', extent: number[]): void
+  (e: 'service-error', payload: { type: string; message: string }): void
 }>()
 
 const wrapRef = ref<HTMLDivElement>()
@@ -63,6 +67,22 @@ const drawSource = new VectorSource()
 const previewSource = new VectorSource()
 const highlightSource = new VectorSource()
 let drawInteraction: Draw | null = null
+let disposed = false
+let serviceGeneration = 0
+let suppressPickUntil = 0
+const serviceRequests = new Set<AbortController>()
+
+function reportServiceError(source: any, type: string) {
+  let reported = false
+  const generation = serviceGeneration
+  const report = () => {
+    if (disposed || reported || generation !== serviceGeneration) return
+    reported = true
+    emit('service-error', { type, message: `${type} 地图数据加载失败，请检查服务地址或网络后重试` })
+  }
+  source.on('tileloaderror', report)
+  source.on('imageloaderror', report)
+}
 
 const drawLayer = new VectorLayer({
   source: drawSource,
@@ -112,7 +132,7 @@ function tdtLayer(type: 'vec' | 'img', annotation = false): TileLayer<XYZ> {
   const t = annotation ? (type === 'img' ? 'cia_w' : 'cva_w') : type === 'img' ? 'img_w' : 'vec_w'
   return new TileLayer({
     source: new XYZ({
-      url: `${urlConfig.tdtUrl}/DataServer?T=${t}&x={x}&y={y}&l={z}&tk=${token}`,
+      url: `${urlConfig.tdtUrlHttps || urlConfig.tdtUrl}/DataServer?T=${t}&x={x}&y={y}&l={z}&tk=${token}`,
       crossOrigin: 'anonymous',
       maxZoom: 18,
     }),
@@ -121,7 +141,7 @@ function tdtLayer(type: 'vec' | 'img', annotation = false): TileLayer<XYZ> {
 }
 
 function buildBase(): TileLayer<XYZ>[] {
-  if (!props.basemap) return []
+  if (!props.basemap || !urlConfig.getTdtToken()) return []
   return [tdtLayer(props.baseType, false), tdtLayer(props.baseType, true)]
 }
 
@@ -138,6 +158,7 @@ function init() {
   })
 
   map.on('singleclick', (evt) => {
+    if (drawInteraction || Date.now() < suppressPickUntil) return
     const [lon, lat] = toLonLat(evt.coordinate)
     emit('pick', { lon, lat })
   })
@@ -154,7 +175,11 @@ function init() {
 onMounted(init)
 
 onBeforeUnmount(() => {
+  disposed = true
+  clearServiceLayers()
+  stopDraw()
   mapRef.value?.setTarget(undefined)
+  mapRef.value?.dispose()
   mapRef.value = null
 })
 
@@ -171,11 +196,11 @@ watch(
   },
 )
 watch(
-  () => props.baseType,
+  () => [props.baseType, props.basemap],
   () => {
     const map = mapRef.value
     if (!map) return
-    map.getLayers().forEach((l) => {
+    ;[...map.getLayers().getArray()].forEach((l) => {
       if ((l as any).get('kind') === 'basemap') map.removeLayer(l)
     })
     const bases = buildBase()
@@ -188,7 +213,7 @@ watch(
 /** 定位到经纬度范围 [minLon,minLat,maxLon,maxLat] */
 function fitExtent(bbox: [number, number, number, number]) {
   const map = mapRef.value
-  if (!map) return
+  if (!map || !bbox.every(Number.isFinite) || bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) return
   const ext = transformExtent(bbox, 'EPSG:4326', 'EPSG:3857')
   map.getView().fit(ext, { padding: [40, 40, 40, 40], maxZoom: 17, duration: 400 })
 }
@@ -206,6 +231,7 @@ function addWms(url: string, layers?: string, opts?: { transparent?: boolean; ti
     properties: { kind: 'service', title: opts?.title || layers || 'WMS' },
   })
   map.addLayer(layer)
+  reportServiceError(layer.getSource(), 'WMS')
   return layer
 }
 
@@ -218,6 +244,7 @@ function addWmsImage(url: string, layers?: string) {
     properties: { kind: 'service' },
   })
   map.addLayer(layer)
+  reportServiceError(layer.getSource(), 'WMS')
   return layer
 }
 
@@ -230,20 +257,26 @@ function addWmsImage(url: string, layers?: string) {
 async function addWmts(url: string, layerHint?: string): Promise<any> {
   const map = mapRef.value
   if (!map || !url) return null
-  const base = url.split('?')[0]
+  const generation = serviceGeneration
+  const controller = new AbortController()
+  serviceRequests.add(controller)
+  const parsedUrl = new URL(url, window.location.href)
+  const base = parsedUrl.origin + parsedUrl.pathname
   let layerName = layerHint || ''
   let matrixSetHint = ''
   try {
-    const u = new URL(url)
+    const u = parsedUrl
     layerName = layerName || u.searchParams.get('layer') || u.searchParams.get('LAYER') || ''
     matrixSetHint = u.searchParams.get('tileMatrixSet') || u.searchParams.get('TILEMATRIXSET') || ''
   } catch {
     /* 保底使用 layerHint */
   }
   const capsUrl = `${base}?service=WMTS&request=GetCapabilities&version=1.0.0`
-  const resp = await fetch(capsUrl)
+  try {
+  const resp = await fetch(capsUrl, { signal: controller.signal })
   if (!resp.ok) throw new Error(`WMTS GetCapabilities 失败（HTTP ${resp.status}）`)
   const caps = new WMTSCapabilities().read(await resp.text())
+  if (disposed || generation !== serviceGeneration || mapRef.value !== map) return null
   const tryOpts = (matrixSet?: string) =>
     optionsFromCapabilities(caps, {
       layer: layerName || undefined,
@@ -257,11 +290,18 @@ async function addWmts(url: string, layerHint?: string): Promise<any> {
     properties: { kind: 'service', title: layerName || 'WMTS' },
   })
   map.addLayer(layer)
+  reportServiceError(layer.getSource(), 'WMTS')
   return layer
+  } finally {
+    serviceRequests.delete(controller)
+  }
 }
 
 /** 清除所有服务图层（保留底图与绘制层） */
 function clearServiceLayers() {
+  serviceGeneration++
+  serviceRequests.forEach((controller) => controller.abort())
+  serviceRequests.clear()
   const map = mapRef.value
   if (!map) return
   const toRemove: any[] = []
@@ -308,7 +348,7 @@ function addMvt(sampleUrl: string): any {
     source: new VectorTileSource({
       format: new MVT(),
       projection: 'EPSG:4326',
-      tileGrid: createXYZ({ extent: [-180, -90, 180, 90], maxZoom: 21 }),
+      tileGrid: createXYZ({ extent: [-180, -90, 180, 90], maxResolution: 180 / 256, maxZoom: 21 }),
       tileUrlFunction: tileUrl,
     }),
     properties: { kind: 'service', title: layer },
@@ -330,6 +370,7 @@ function addMvt(sampleUrl: string): any {
     renderMode: 'hybrid',
   })
   map.addLayer(layer_)
+  reportServiceError(layer_.getSource(), 'MVT')
   return layer_
 }
 
@@ -376,8 +417,7 @@ function highlightWkt(wkt: string | string[], fit = false) {
     if (!s) return
     try {
       const feat = fmt.readFeature(s, { dataProjection: 'EPSG:4326', featureProjection: 'EPSG:3857' })
-      highlightSource.addFeature(feat)
-      added++
+      if (feat) { highlightSource.addFeature(feat); added++ }
     } catch {
       /* 忽略无法解析的 WKT */
     }
@@ -447,6 +487,7 @@ function startDraw(kind: DrawKind) {
     geometryFunction: kind === 'Box' ? createBox() : undefined,
   } as any)
   drawInteraction.on('drawend', (evt: any) => {
+    suppressPickUntil = Date.now() + 500
     const geom = evt.feature.getGeometry()
     const fmt = new GeoJSON()
     let payload: any = { kind }
@@ -457,7 +498,8 @@ function startDraw(kind: DrawKind) {
     } else if (kind === 'Circle') {
       const c = geom.getCenter()
       const [lon, lat] = toLonLat(c)
-      const radius = geom.getRadius() // 3857 米近似
+      const edge = toLonLat([c[0] + geom.getRadius(), c[1]])
+      const radius = getDistance([lon, lat], edge)
       payload = { kind, lon, lat, radius, wkt: `POINT(${lon} ${lat})` }
     } else {
       const feat = fmt.writeFeatureObject(evt.feature, {
@@ -480,13 +522,7 @@ function stopDraw() {
 
 /** 简化 GeoJSON Geometry → WKT（仅供查询参数使用） */
 function geojsonToWkt(g: any): string {
-  if (!g) return ''
-  const rings = (coords: any[]) => '(' + coords.map((r: any[]) => '(' + r.map((p) => `${p[0]} ${p[1]}`).join(',') + ')').join(',') + ')'
-  if (g.type === 'Polygon') return `POLYGON(${rings(g.coordinates)})`
-  if (g.type === 'MultiPolygon')
-    return `MULTIPOLYGON(` + g.coordinates.map((p: any) => rings(p)).join(',') + ')'
-  if (g.type === 'Point') return `POINT(${g.coordinates[0]} ${g.coordinates[1]})`
-  return ''
+  return geometryJsonToWkt(g)
 }
 
 defineExpose({
@@ -513,10 +549,11 @@ defineExpose({
 <template>
   <div class="ol-wrap">
     <div ref="wrapRef" class="ol-map"></div>
+    <div v-if="basemap && !urlConfig.getTdtToken()" class="basemap-note">底图暂不可用，仍可查看已加载的空间数据</div>
     <div v-if="popup.visible" class="map-popup" :style="{ left: popup.left + 'px', top: popup.top + 'px' }">
       <div class="mp-head">
         <span class="ellip" :title="popup.title">{{ popup.title }}</span>
-        <span class="mp-close" title="关闭" @click="hidePopup">×</span>
+        <button class="mp-close" type="button" aria-label="关闭属性弹窗" title="关闭" @click="hidePopup"><Icon name="x" :size="14" /></button>
       </div>
       <div class="mp-body">
         <div v-for="([k, v], i) in popup.rows" :key="i" class="mp-row">
@@ -540,6 +577,7 @@ defineExpose({
   height: 100%;
   background: #eef2f7;
 }
+.basemap-note { position: absolute; bottom: 7px; left: 8px; max-width: calc(100% - 16px); padding: 4px 7px; background: #ffffffdc; border-radius: 4px; color: var(--ink-3); font-size: 11px; pointer-events: none; }
 .ol-map :deep(.ol-control) {
   background: rgba(255, 255, 255, 0.85);
   border-radius: 5px;
@@ -567,10 +605,13 @@ defineExpose({
   border-bottom: 1px solid var(--line);
 }
 .map-popup .mp-close {
+  display: inline-grid;
+  place-items: center;
+  padding: 2px;
+  border: 0;
+  background: transparent;
   cursor: pointer;
   color: #98a4b3;
-  font-size: 15px;
-  line-height: 1;
 }
 .map-popup .mp-close:hover {
   color: #ee4433;

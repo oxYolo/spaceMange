@@ -3,13 +3,13 @@ import { http } from '@/api/request'
 import urlConfig from '@/config'
 
 interface LoginResponse {
-  code: number
+  code: number | string
   msg?: string
   data?: { access_token?: string }
 }
 
 interface ProfileResponse {
-  code: number
+  code: number | string
   msg?: string
   user?: { userName?: string; nickName?: string }
   roles?: string[]
@@ -18,7 +18,7 @@ interface ProfileResponse {
 
 function loginPassword(password: string): string {
   // Flyspace 的开发模式使用明文 dronelogin；正式模式使用服务端配置的 SM2 公钥。
-  if (!['production', 'test', 'cb'].includes(import.meta.env.MODE) || __GEODATA_MOCK__) return password
+  if (!['production', 'test', 'cb'].includes(import.meta.env.MODE)) return password
 
   const configured = (urlConfig.authSm2PublicKey || '').replace(/\s+/g, '')
   const publicKey = configured.startsWith('04') ? configured : `04${configured}`
@@ -40,7 +40,11 @@ export const authApi = {
   getUserInfo(): Promise<ProfileResponse> {
     return http.get<ProfileResponse>('/system/user/getInfo', undefined, { baseURL: urlConfig.baseApiUrl, silent: true })
   },
-  logout(): Promise<{ code: number; msg?: string }> {
-    return http.del('/auth/logout', undefined, { baseURL: urlConfig.baseApiUrl, silent: true })
+  logout(token?: string): Promise<{ code: number; msg?: string }> {
+    return http.del('/auth/logout', undefined, {
+      baseURL: urlConfig.baseApiUrl,
+      silent: true,
+      ...(token ? { headers: { isToken: false, Authorization: `Bearer ${token}` } } : {}),
+    })
   },
 }

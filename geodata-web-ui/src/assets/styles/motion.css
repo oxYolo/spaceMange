@@ -1,0 +1,112 @@
+/* Shared motion: animate feedback and short transitions, keep map surfaces stable. */
+:root {
+  --motion-fast: 160ms;
+  --motion-base: 240ms;
+  --motion-slow: 360ms;
+  --motion-ease: cubic-bezier(.22, 1, .36, 1);
+  --el-transition-duration: 0.24s;
+  --el-transition-duration-fast: 0.16s;
+}
+
+@keyframes sdms-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes sdms-rise-in {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sdms-symbol-in {
+  from { opacity: 0; transform: translateY(6px) scale(.86) rotate(-6deg); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sdms-dialog-in {
+  from { opacity: 0; transform: translateY(12px) scale(.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes sdms-dialog-out {
+  to { opacity: 0; transform: translateY(6px) scale(.99); }
+}
+@keyframes sdms-progress-sheen {
+  from { transform: translateX(-120%); }
+  to { transform: translateX(120%); }
+}
+@keyframes sdms-status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(192 125 22 / 0%); }
+  45% { box-shadow: 0 0 0 4px rgb(192 125 22 / 13%); }
+}
+
+.el-button, .btn, .chip {
+  transition: transform var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast), border-color var(--motion-fast),
+    color var(--motion-fast), box-shadow var(--motion-base) !important;
+}
+.el-button:not(.is-disabled):not(.is-loading):active,
+.btn:not(:disabled):active { transform: translateY(1px) scale(.98); }
+.el-button.is-link:active { transform: translateY(1px); }
+.el-button:not(.is-loading) > span > svg {
+  transition: transform var(--motion-base) var(--motion-ease);
+}
+.el-input__wrapper, .el-select__wrapper, .el-textarea__inner {
+  transition: box-shadow var(--motion-base), background-color var(--motion-base) !important;
+}
+.el-checkbox__inner, .el-radio__inner {
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.el-table__body td.el-table__cell { transition: background-color var(--motion-fast); }
+.el-table__body .el-table__row {
+  animation: sdms-fade-in var(--motion-slow) var(--motion-ease) backwards;
+}
+.el-table__body .el-table__row:nth-child(2) { animation-delay: 25ms; }
+.el-table__body .el-table__row:nth-child(3) { animation-delay: 50ms; }
+.el-table__body .el-table__row:nth-child(4) { animation-delay: 75ms; }
+.el-table__body .el-table__row:nth-child(n+5) { animation-delay: 100ms; }
+
+.page-head-copy { animation: sdms-rise-in var(--motion-slow) var(--motion-ease) backwards; }
+.page-head > .tools { animation: sdms-rise-in var(--motion-slow) var(--motion-ease) 55ms backwards; }
+.el-empty, .dataset-empty { animation: sdms-rise-in var(--motion-slow) var(--motion-ease) backwards; }
+.el-empty__image, .dataset-empty .empty-symbol {
+  animation: sdms-symbol-in 480ms var(--motion-ease) backwards;
+}
+.el-alert { animation: sdms-rise-in var(--motion-base) var(--motion-ease) backwards; }
+
+.el-overlay { backdrop-filter: blur(2px); }
+.dialog-fade-enter-active .el-overlay-dialog {
+  animation: sdms-dialog-in var(--motion-slow) var(--motion-ease);
+}
+.dialog-fade-leave-active .el-overlay-dialog {
+  animation: sdms-dialog-out var(--motion-fast) ease-in;
+}
+.el-drawer { transition-timing-function: var(--motion-ease); }
+.el-drawer__header { animation: sdms-fade-in var(--motion-slow) ease-out backwards; }
+.el-drawer__body { animation: sdms-fade-in var(--motion-slow) ease-out 60ms backwards; }
+
+.sdms-reveal-enter-active, .sdms-reveal-leave-active {
+  transition: opacity var(--motion-base), transform var(--motion-base) var(--motion-ease);
+}
+.sdms-reveal-enter-from, .sdms-reveal-leave-to { opacity: 0; transform: translateY(6px); }
+.sdms-chip-enter-active, .sdms-chip-leave-active, .sdms-chip-move {
+  transition: opacity var(--motion-fast), transform var(--motion-base) var(--motion-ease);
+}
+.sdms-chip-enter-from, .sdms-chip-leave-to { opacity: 0; transform: translateY(4px) scale(.94); }
+
+@media (hover: hover) and (pointer: fine) {
+  .el-button:not(.is-disabled):not(.is-loading):not(.is-link):not(.is-text):hover,
+  .btn:not(:disabled):hover { transform: translateY(-1px); }
+  .el-button--primary:not(.is-disabled):not(.is-link):not(.is-text):hover,
+  .btn.primary:not(:disabled):hover { box-shadow: 0 4px 12px rgb(17 99 181 / 18%); }
+  .el-button:not(.is-loading):hover > span > svg { transform: translateY(-1px); }
+}
+
+/* Keep interaction immediate for users who request reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  .el-overlay { backdrop-filter: none; }
+}

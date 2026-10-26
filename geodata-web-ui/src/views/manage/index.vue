@@ -1,37 +1,26 @@
 <script setup lang="ts">
-/**
- * 数据管理（#/manage）—— 对齐 docs/低空监管数据中台-数据管理原型.html
- * 真融合：新原型样式与结构为骨架，原「资源总览 /data」「数据接入 /ingest」「三维数据 /model3d」
- * 三页的功能与字段全部并入（旧页已删除）：
- *  - 左侧资源目录树：dictType 字典 + getLayerTree(Gzip 解压) + 分类计数 + 点击过滤（原资源总览）
- *  - 表格列保留原属性：分类 / 空间参考 / 发布状态 / 数据格式 等
- *  - 上传抽屉保留原表单字段：所属目录 / 空间参考系(字典) / 行政区划(region) / 数据密级 / 数据标签 / 摘要
- *  - 二维链路：分片上传 AddFiles→FileMerge→Insert(或 InsertImageLayer 同步建图)→UpdateStatus（原数据接入）
- *  - 三维链路（原三维数据页全量）：init(srs)→分片(5MiB)→complete→下发转换/重试；状态机进度轮询；
- *    断点续传（GET parts→跳过已传→续传→complete）；已发布可复制地址 / 三维预览
- * 能力收敛（已确认）：服务器目录上传入口禁用；SHP 坐标解析与裸分片通道移除；
- * 原型 6 类型不含 TILESET/SINGLE/BIM 直传类型（可经断点续传恢复任务）。
- * 服务管理页已并入（主导航 4→3）：发布状态筛选、服务格式探测列（WMS/WFS/WMTS + 切片中）、
- * 已发布数据「复制地址」、批量删除；原页「使用状态(启停)」为无端点装饰、发布向导由行内发布覆盖、
- * 「更新状态(已添加到地图)」归地图管理域，均收敛移除。
- */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+/** Dataset workspace: filtering and row actions; upload/query/state rules live in features/datasets. */
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import PageHead from '@/components/common/PageHead.vue'
 import Icon from '@/components/common/Icon.vue'
-import ResourceDetail from '@/components/resource/ResourceDetail.vue'
+const ResourceDetail = defineAsyncComponent(() => import('@/components/resource/ResourceDetail.vue'))
 import {
   DATA_TYPES,
+  DATASET_FILTER_TYPES,
   SERVICE_DEFAULTS,
   SERVICE_FORMATS,
-  UPLOAD_ACCEPT,
-  extFormat,
-  isRasterTypeKey,
   loadUnifiedPage,
   m3dStatus,
+  applyIngestionDetail,
+  needsIngestionVerification,
   fetchSvcAddress,
-  extractSvcUrl,
+  fetchAllSvcAddresses,
+  getDatasetServiceState,
+  getDatasetCapabilities,
+  invalidateDatasets,
+  invalidateDatasetQueries,
   type UnifiedRow,
 } from '@/utils/datasets'
 import {
@@ -39,19 +28,35 @@ import {
   dictApi,
   layerContentApi,
   model3dApi,
-  regionApi,
   serverInterfaceApi,
 } from '@/api'
-import { fmtTime, pickList, pickTotal } from '@/utils/format'
+import { fmtTime, pickList } from '@/utils/format'
 import { decompressJson } from '@/utils/gzip'
 import { onImMessage, onImBizMessage, imEnabled, ensureImAlive, type ImMessage } from '@/utils/im'
 import { copyText } from '@/utils/clipboard'
-import { chunkedUpload, m3dUpload, m3dResume } from '@/utils/chunkUpload'
-import { useUserStore } from '@/stores/user'
-import ServicePreview from '@/components/preview/ServicePreview.vue'
+import { useSearchStore } from '@/stores/search'
+import { mapSettledWithConcurrency } from '@/utils/async'
+import { showError } from '@/utils/feedback'
+import DatasetQuickFilters from '@/features/datasets/components/DatasetQuickFilters.vue'
+import { downloadDatasetCsv } from '@/features/datasets/export'
+import { getSessionVersion } from '@/auth/session'
+import DatasetRowActions from '@/features/datasets/components/DatasetRowActions.vue'
+import DatasetTypeMark from '@/features/datasets/components/DatasetTypeMark.vue'
+import DatasetEmptyState from '@/features/datasets/components/DatasetEmptyState.vue'
+import { DATASET_LIST_QUERY_KEYS, datasetListQuery, datasetListSignature, readDatasetListState, type DatasetListState } from '@/features/datasets/listState'
+import type { DatasetSort } from '@/features/datasets/query'
+import DatasetUploadDrawer from '@/features/datasets/components/DatasetUploadDrawer.vue'
+import { useUserStore } from '@/auth/store'
+const ServicePreview = defineAsyncComponent(() => import('@/components/preview/ServicePreview.vue'))
 
 const userStore = useUserStore()
 const route = useRoute()
+const router = useRouter()
+const globalSearch = useSearchStore()
+const listError = ref('')
+const batchDeleting = ref(false)
+const rowBusy = reactive<Record<string, boolean>>({})
+let disposed = false
 const USER = userStore.userName || 'admin'
 
 /* ================= 左侧资源目录树（原资源总览） ================= */
@@ -84,6 +89,7 @@ async function loadDictOptions() {
 /** 主通道：getLayerTree（Gzip+Base64 压缩串，先解压） */
 async function loadTree() {
   treeLoading.value = true
+  treeChildrenCache.clear()
   try {
     if (dictType.value) {
       const raw = await layerContentApi.getLayerTree({
@@ -106,7 +112,7 @@ async function loadTree() {
     await applyCategoryCounts()
   } catch (e: any) {
     treeData.value = []
-    if (!e?.silent) ElMessage.error(e?.message || '目录树加载失败')
+    if (!e?.silent) showError(e, '目录树加载失败')
   } finally {
     treeLoading.value = false
   }
@@ -152,13 +158,20 @@ async function applyCategoryCounts() {
 }
 
 function onTreeClick(node: any) {
+  if (node?.layerContent) {
+    const id = String(node.layerContent.id ?? node.id ?? '')
+    if (id) { drawerLayer.value = { ...node.layerContent, id }; drawerVisible.value = true }
+    return
+  }
   selectedCatalog.value = String(node?.id ?? '')
+  applied.catalog = selectedCatalog.value
   mobileTreeOpen.value = false
   pageIndex.value = 1
   loadList()
 }
 function clearTreeFilter() {
   selectedCatalog.value = ''
+  applied.catalog = ''
   mobileTreeOpen.value = false
   treeRef.value?.setCurrentKey?.(null)
   pageIndex.value = 1
@@ -203,19 +216,80 @@ function normalizeTreeNode(n: any): any {
 }
 
 /* ================= 筛选与列表 ================= */
-const filters = reactive({ type: '', status: '', pub: '', kw: '' })
-const applied = reactive({ type: '', status: '', pub: '', kw: '', catalog: '' })
-const order = ref<'desc' | 'asc'>('desc')
+const initialListState = readDatasetListState(route.query)
+const filters = reactive({ type: initialListState.type, status: initialListState.status, pub: initialListState.pub, kw: initialListState.kw })
+const applied = reactive({ ...filters, catalog: initialListState.catalog })
+selectedCatalog.value = initialListState.catalog
+const sort = ref<DatasetSort>(initialListState.sort)
+const order = ref<'desc' | 'asc'>(initialListState.order)
 const rows = ref<UnifiedRow[]>([])
 const total = ref(0)
-const pageSize = ref(10)
-const pageIndex = ref(1)
+const pageSize = ref(initialListState.size)
+const pageIndex = ref(initialListState.page)
+const viewMode = ref<'table' | 'cards'>('table')
+try { if (localStorage.getItem('GeoDataListView') === 'cards') viewMode.value = 'cards' } catch { /* Optional preference. */ }
+function setViewMode(value: 'table' | 'cards') {
+  viewMode.value = value
+  try { localStorage.setItem('GeoDataListView', value) } catch { /* Keep current preference in memory. */ }
+}
+const lastUpdated = ref('')
+function currentListState(): DatasetListState {
+  return { ...applied, sort: sort.value, order: order.value, page: pageIndex.value, size: pageSize.value }
+}
+function applyListView(state: DatasetListState) {
+  if (loading.value || batchDeleting.value || disposed) return
+  Object.assign(filters, { type: state.type, status: state.status, pub: state.pub, kw: state.kw })
+  Object.assign(applied, filters, { catalog: state.catalog })
+  selectedCatalog.value = state.catalog
+  treeRef.value?.setCurrentKey?.(state.catalog || null)
+  sort.value = state.sort; order.value = state.order; pageSize.value = state.size; pageIndex.value = 1
+  void loadList()
+}
+function persistListQuery() {
+  const current = currentListState()
+  if (datasetListSignature(readDatasetListState(route.query)) === datasetListSignature(current)) return
+  const query = { ...route.query }
+  DATASET_LIST_QUERY_KEYS.forEach(key => { delete query[key] })
+  void router.replace({ query: { ...query, ...datasetListQuery(current) } })
+}
+const hasFilters = computed(() => Boolean(applied.type || applied.status || applied.pub || applied.kw || applied.catalog))
+const activeFilterTags = computed(() => [
+  applied.type && { key: 'type', label: DATASET_FILTER_TYPES.find(type => type.key === applied.type)?.label || applied.type },
+  applied.status && { key: 'status', label: STATUS_OPTS.find(status => status.value === applied.status)?.label || applied.status },
+  applied.pub && { key: 'pub', label: applied.pub === 'yes' ? '已发布' : '未发布' },
+  applied.kw && { key: 'kw', label: `名称：${applied.kw}` },
+  applied.catalog && { key: 'catalog', label: '已选目录' },
+].filter((item): item is { key: string; label: string } => Boolean(item)))
+function removeFilter(key: string) {
+  if (key === 'catalog') {
+    selectedCatalog.value = applied.catalog = ''
+    treeRef.value?.setCurrentKey?.(null)
+  } else if (key in filters) {
+    filters[key as keyof typeof filters] = ''
+    applied[key as keyof typeof filters] = ''
+  } else return
+  pageIndex.value = 1
+  void loadList()
+}
+function refreshList() { invalidateDatasetQueries(); return loadList() }
+function changeSort(value: string) {
+  const [field, direction] = value.split(':')
+  sort.value = field as DatasetSort
+  order.value = direction as 'asc' | 'desc'
+  pageIndex.value = 1
+  void loadList()
+}
 const loading = ref(false)
 let listRequestId = 0
+let lastRequestedSignature = ''
+function onPaginationChange() {
+  if (datasetListSignature(currentListState()) !== lastRequestedSignature) void loadList()
+}
 
 const STATUS_OPTS = [
-  { value: 'uploading', label: '数据上传中' },
-  { value: 'ok', label: '数据上传成功' },
+  { value: 'uploading', label: '上传 / 入库中' },
+  { value: 'converting', label: '转换中' },
+  { value: 'ok', label: '上传完成' },
   { value: 'fail', label: '处理失败' },
 ]
 
@@ -226,8 +300,11 @@ const PUB_OPTS = [
 ]
 
 async function loadList(silent = false) {
+  if (silent && (batchDeleting.value || Object.values(rowBusy).some(Boolean))) { schedulePoll(); return }
   const requestId = ++listRequestId
-  if (!silent) loading.value = true
+  lastRequestedSignature = datasetListSignature(currentListState())
+  if (!silent) persistListQuery()
+  if (!silent) { loading.value = true; listError.value = '' }
   try {
     const res = await loadUnifiedPage(
       {
@@ -236,21 +313,40 @@ async function loadList(silent = false) {
         keyword: applied.kw,
         layerType: applied.catalog,
         publishedOnly: applied.pub === 'yes' ? true : applied.pub === 'no' ? false : undefined,
+        order: order.value,
+        sort: sort.value,
       },
       pageSize.value,
       pageIndex.value,
     )
-    if (requestId !== listRequestId) return
-    let list = res.rows
-    if (order.value === 'asc') list = [...list].reverse()
-    rows.value = list
+    if (disposed || requestId !== listRequestId) return
+    if (silent && (batchDeleting.value || Object.values(rowBusy).some(Boolean))) return
+    if (!res.rows.length && pageIndex.value > Math.max(1, Math.ceil(res.total / pageSize.value))) {
+      pageIndex.value = Math.max(1, Math.ceil(res.total / pageSize.value))
+      await loadList(silent)
+      return
+    }
+    lastUpdated.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
+    const selectedKeys = silent ? new Set(picked.value) : new Set<string>()
+    const previousRows = new Map(rows.value.map(row => [row.key, row]))
+    clearSelection()
+    rows.value = res.rows.map(row => {
+      if (!needsIngestionVerification(row)) return row
+      // 列表 DTO 缺少 isShow，已被详情确认的同一资源不可在每次轮询时重新降为待确认。
+      const previouslyReady = silent && row.status === 'ok' && previousRows.get(row.key)?.ingestReady === true
+      return applyIngestionDetail(row, previouslyReady ? { id: row.id, isShow: 1 } : {})
+    })
     total.value = res.total
-    probeRows()
+    if (selectedKeys.size) {
+      await nextTick()
+      if (disposed || requestId !== listRequestId) return
+      for (const row of rows.value) if (selectedKeys.has(row.key) && isRemovableRow(row)) togglePicked(row, true)
+    }
+    void probeRows(requestId)
   } catch (e: any) {
     if (requestId === listRequestId && !silent) {
-      rows.value = []
-      total.value = 0
-      ElMessage.error(e?.message || '列表加载失败')
+      listError.value = e?.message || '列表加载失败'
+      showError(e, '列表加载失败')
     }
   } finally {
     if (requestId === listRequestId) {
@@ -276,436 +372,87 @@ function doReset() {
   doSearch()
 }
 function toggleOrder() {
+  sort.value = 'time'
   order.value = order.value === 'desc' ? 'asc' : 'desc'
-  rows.value = [...rows.value].reverse()
+  pageIndex.value = 1
+  void loadList()
 }
 
 /** 三维转换/上传进行中（或二维上传中）时 5s 静默轮询刷新进度 */
 let pollTimer: number | null = null
 /* ================= 服务探测（原服务管理页并入） ================= */
 /** 每行服务探测结果：key → { formats, url, tile } */
-const svcInfo = reactive<Record<string, { formats: string[]; url: string; tile: string }>>({})
+const svcInfo = reactive<Record<string, { formats: string[]; url: string; tile: string; error?: string }>>({})
 
 /** 逐行探测已发布服务的格式与切片状态（仅当前页，并行；未发布行跳过） */
-async function probeRows() {
-  await Promise.all(
-    rows.value.map(async (r) => {
-      if (r.src === 'm3d') {
-        const st = String(r.raw?.status ?? '')
-        svcInfo[r.key] = { formats: st === '4' ? ['3DTiles'] : [], url: '', tile: '' }
-        return
-      }
-      if (!r.published) {
-        delete svcInfo[r.key]
-        return
-      }
-      const info = { formats: [] as string[], url: '', tile: '' }
-      const probes = await Promise.allSettled([
-        serverInterfaceApi.getServerInterface(r.id, 'WMS'),
-        serverInterfaceApi.getServerInterface(r.id, 'WFS'),
-        serverInterfaceApi.getServerInterface(r.id, 'WMTS'),
-        serverInterfaceApi.getServerInterface(r.id, 'MVT'),
-        serverInterfaceApi.tileProgress(r.id),
-      ])
-      // getServerInterface 返回 {publishType, list:[{关键字, 服务路径}]}（DTO 中文键），按所查类型取 服务路径
-      const pick = (res: any, type: string): string => extractSvcUrl(res, type)
-      const wmsUrl = probes[0].status === 'fulfilled' ? pick((probes[0] as any).value, 'WMS') : ''
-      if (wmsUrl) {
-        info.formats.push('WMS')
-        info.url = info.url || wmsUrl
-      }
-      if (probes[1].status === 'fulfilled' && pick((probes[1] as any).value, 'WFS')) info.formats.push('WFS')
-      if (probes[2].status === 'fulfilled' && pick((probes[2] as any).value, 'WMTS')) info.formats.push('WMTS')
-      if (probes[3].status === 'fulfilled' && pick((probes[3] as any).value, 'MVT')) info.formats.push('MVT')
-      if (probes[4].status === 'fulfilled') {
-        const tp: any = (probes[4] as any).value
-        const st = String(tp?.result?.status ?? tp?.status ?? '').toUpperCase()
-        if (st === 'RUNNING') info.tile = '切片中'
-      }
-      svcInfo[r.key] = info
-    }),
-  )
+async function probeRows(requestId = listRequestId) {
+  const currentRows = [...rows.value]
+  await mapSettledWithConcurrency(currentRows, 4, async row => {
+    if (disposed || requestId !== listRequestId) return
+    if (needsIngestionVerification(row)) {
+      try {
+        const verified = await verifyIngestion(row)
+        if (disposed || requestId !== listRequestId) return
+        Object.assign(row, verified)
+      } catch { /* Keep pending, retry on the next poll. Never assume import succeeded. */ }
+    }
+    const info = await getDatasetServiceState(row)
+    if (disposed || requestId !== listRequestId) return
+    svcInfo[row.key] = info
+  })
+  const activeKeys = new Set(currentRows.map(row => row.key))
+  if (requestId === listRequestId) Object.keys(svcInfo).forEach(key => { if (!activeKeys.has(key)) delete svcInfo[key] })
 }
 
 const hasRunning = computed(() =>
   rows.value.some(
     (r) =>
-      r.status === 'uploading' ||
+      r.ingestPending || r.status === 'uploading' ||
       r.status === 'converting' ||
       (r.src === 'm3d' && ['0', '2', '3'].includes(String(r.raw?.status ?? ''))) ||
       svcInfo[r.key]?.tile === '切片中',
   ),
 )
 const anyDialogOpen = computed(
-  () => upload.visible || edit.visible || detail.visible || publish.visible || previewVisible.value || drawerVisible.value,
+  () => uploadDrawer.value?.visible || edit.visible || detail.visible || publish.visible || previewVisible.value || drawerVisible.value,
 )
 function schedulePoll() {
+  if (disposed) return
   if (pollTimer) window.clearTimeout(pollTimer)
   pollTimer = window.setTimeout(
     () => {
       // IM 断线自愈：automaticReconnect 序列耗尽后不会自动恢复，轮询 tick 里幂等重连（连接正常时零成本）
       ensureImAlive()
-      if (hasRunning.value && !anyDialogOpen.value) loadList(true)
+      if (!disposed && !document.hidden && hasRunning.value && !anyDialogOpen.value) { invalidateDatasetQueries(); void loadList(true) }
       else schedulePoll()
     },
     imEnabled() ? 15000 : 5000,
   )
 }
 
-/* ================= 上传抽屉（全量字段 = 原新建资源表单 + 原型结构） ================= */
-const upload = reactive({
-  visible: false,
-  submitting: false,
-  progress: 0,
-  progressText: '',
-  name: '',
-  typeKey: '' as string,
-  catalogId: '',
-  layerRefence: '',
-  srs: '',
-  area: '',
-  confidential: '内部',
-  keywords: '',
-  layerDesc: '',
-  autoMap: false,
-  srcMode: 'local' as 'local' | 'dir' | 'resume',
-  dir: '',
-  resumeId: '',
-  file: null as File | null,
-  /** SHP 家族配套文件（.shx/.dbf/.prj/.cpg），仅矢量多选时填充 */
-  familyFiles: [] as File[],
-})
-
-const uploadInputRef = ref<HTMLInputElement>()
-const dragOver = ref(false)
-const fmtPopVisible = ref(false)
-
-/* 所属目录（sdms_datatype，与图层配置同源） */
-const catalogOptions = ref<{ id: string; label: string }[]>([])
-function flattenCatalog(list: any[], out: { id: string; label: string }[] = []) {
-  list.forEach((n: any) => {
-    out.push({ id: String(n.id), label: String(n.typeName ?? n.name ?? n.id) })
-    if (Array.isArray(n.children)) flattenCatalog(n.children, out)
-  })
-  return out
+const uploadDrawer = ref<InstanceType<typeof DatasetUploadDrawer>>()
+function openUpload(typeKey?: unknown) {
+  uploadDrawer.value?.open(typeof typeKey === 'string' ? typeKey : '', selectedCatalog.value)
 }
-async function loadCatalogs() {
-  try {
-    catalogOptions.value = flattenCatalog(pickList(await dataTypeApi.getAllList()))
-  } catch {
-    catalogOptions.value = []
-  }
-}
-
-/* 空间参考系（字典）/ 行政区划（whulri 基座 /region/list） */
-const srsOptions = ref<any[]>([])
-const areaOptions = ref<any[]>([])
-async function loadFormOptions() {
-  try {
-    srsOptions.value = pickList(await dictApi.codeAll())
-  } catch {
-    srsOptions.value = []
-  }
-  try {
-    areaOptions.value = await regionApi.getAllList()
-  } catch {
-    areaOptions.value = []
-  }
-}
-
-const curType = computed(() => DATA_TYPES.find((t) => t.key === upload.typeKey))
-const isLayerType = computed(() => curType.value?.src === 'layer')
-const isM3dType = computed(() => curType.value?.src === 'm3d')
-const isRasterType = computed(() => upload.typeKey === 'raster' || upload.typeKey === 'terrain')
-const uploadAccept = computed(() =>
-  isM3dType.value ? '.osgb,.las,.laz,.obj,.fbx,.ifc,.zip,.json' : UPLOAD_ACCEPT,
-)
-
-/** 格式自动识别 */
-const detect = computed(() => {
-  const f = upload.srcMode === 'local' ? upload.file?.name : upload.dir.trim()
-  if (!f) return null
-  const seg = f.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || ''
-  const ext = seg.includes('.') ? seg.split('.').pop()!.toLowerCase() : ''
-  const fmt = extFormat(seg)
-  const candidates = DATA_TYPES.filter((t) => t.formats.includes(fmt)).map((t) => t.key)
-  return { ext, fmt, candidates, archive: ['zip', 'tar', 'gz', 'tgz', '7z', 'rar'].includes(ext) }
-})
-const detectClass = computed(() => {
-  const d = detect.value
-  if (!d) return ''
-  if (d.archive || !d.fmt) return 'warn'
-  return d.candidates.includes(upload.typeKey as any) ? 'ok' : 'warn'
-})
-const detectText = computed(() => {
-  const d = detect.value
-  if (!d) return '选择数据文件后，系统将按扩展名自动识别数据格式。'
-  const def = curType.value?.formats[0] || '-'
-  if (upload.srcMode === 'resume') return '续传模式：将按原任务分片协议跳过已传分片，格式沿用原任务登记。'
-  if (d.archive)
-    return `上传的是压缩包（.${d.ext}），无法直接读取内部格式，暂按数据类型「${curType.value?.label}」的默认格式 ${def} 登记。`
-  if (!d.fmt) return `无法识别扩展名 .${d.ext}，暂按数据类型「${curType.value?.label}」的默认格式 ${def} 登记。`
-  if (d.candidates.includes(upload.typeKey as any))
-    return `已识别数据格式：${d.fmt}（按扩展名 .${d.ext}），与数据类型匹配。`
-  const candLabel = d.candidates.map((k) => DATA_TYPES.find((t) => t.key === k)?.label).join(' / ')
-  return `已识别数据格式：${d.fmt}（按扩展名 .${d.ext}），与当前选择的数据类型「${curType.value?.label}」不一致（该格式通常属「${candLabel || '未知类型'}」）。`
-})
-
-/** 三维类型/源格式映射（zip 由后端解压后按类型定位内容；tileset 直传 zip 或 tileset.json） */
-const M3D_TYPE_BY_KEY: Record<string, string> = {
-  oblique: 'OSGB',
-  pointcloud: 'POINTCLOUD',
-  tileset: 'TILESET',
-  single: 'SINGLE',
-  bim: 'BIM',
-}
-const M3D_FMT_BY_KEY: Record<string, string[]> = {
-  oblique: ['osgb', 'zip'],
-  pointcloud: ['las', 'laz', 'zip'],
-  tileset: ['zip', 'json'],
-  single: ['obj', 'fbx', 'zip'],
-  bim: ['ifc', 'zip'],
-}
-/** 计算 srcFormat：zip 无法探测内部格式，按类型取默认源格式 */
-function m3dSrcFormat(typeKey: string, fileName: string): string {
-  const ext = (fileName.split('.').pop() || '').toLowerCase()
-  if (typeKey === 'tileset') return ['zip', 'json'].includes(ext) ? 'tileset' : ''
-  if (ext === 'zip') {
-    const fallback: Record<string, string> = { oblique: 'osgb', pointcloud: 'las', single: 'obj', bim: 'ifc' }
-    return fallback[typeKey] || ''
-  }
-  return ['osgb', 'las', 'laz', 'obj', 'fbx', 'ifc'].includes(ext) ? ext : ''
-}
-
-function openUpload() {
-  upload.visible = true
-  upload.name = ''
-  upload.typeKey = ''
-  upload.catalogId = ''
-  upload.layerRefence = ''
-  upload.srs = ''
-  upload.area = ''
-  upload.confidential = '内部'
-  upload.keywords = ''
-  upload.layerDesc = ''
-  upload.autoMap = false
-  upload.srcMode = 'local'
-  upload.dir = ''
-  upload.resumeId = ''
-  upload.file = null
-  upload.familyFiles = []
-  upload.progress = 0
-  upload.progressText = ''
-  upload.submitting = false
-  if (!catalogOptions.value.length) loadCatalogs()
-  if (!srsOptions.value.length || !areaOptions.value.length) loadFormOptions()
-}
-
-/** 矢量数据支持 SHP 家族多选（.shp 主文件 + .shx/.dbf/.prj/.cpg） */
-const canMultiPick = computed(
-  () => curType.value?.src === 'layer' && !isRasterTypeKey(curType.value?.key),
-)
-
-/** 归一选择结果：矢量家族优先取 .shp 作主文件，其余作配套文件；非矢量仅取第一个 */
-function applyPickedFiles(list: File[]) {
-  if (!list.length) return
-  if (!canMultiPick.value && list.length > 1) {
-    ElMessage.warning('该数据类型仅支持单文件上传，已取第一个文件')
-  }
-  const files = canMultiPick.value ? [...list] : [list[0]]
-  let primary = files[0]
-  if (canMultiPick.value && files.length > 1) {
-    const shp = files.find((f) => /\.shp$/i.test(f.name))
-    if (shp) primary = shp
-  }
-  upload.file = primary
-  upload.familyFiles = files.filter((f) => f !== primary)
-  if (!upload.name.trim()) upload.name = primary.name.replace(/\.[^.]+$/, '')
-}
-function onPickFile(e: Event) {
-  const t = e.target as HTMLInputElement
-  applyPickedFiles(Array.from(t.files || []))
-  t.value = ''
-}
-function onDropFile(e: DragEvent) {
-  dragOver.value = false
-  applyPickedFiles(Array.from(e.dataTransfer?.files || []))
-}
-function removeFile() {
-  upload.file = null
-  upload.familyFiles = []
-  if (uploadInputRef.value) uploadInputRef.value.value = ''
-}
-/** 切换类型时清理不适用的字段 */
-watch(
-  () => upload.typeKey,
-  () => {
-    upload.autoMap = false
-  },
-)
-
-/* ---------- 上传链路 ---------- */
-
-async function submitUpload() {
-  if (upload.srcMode === 'resume') {
-    if (!upload.resumeId.trim()) return ElMessage.warning('请输入原上传任务 id')
-    if (!upload.file) return ElMessage.warning('请选择与原任务相同的文件')
-    upload.submitting = true
-    upload.progress = 0
-    try {
-      await m3dResume(upload.resumeId, upload.file!, (p, t) => {
-        upload.progress = p
-        if (t) upload.progressText = t
-      })
-      ElMessage.success('续传完成，状态为「待转换」，可在列表中下发转换')
-      upload.visible = false
-      pageIndex.value = 1
-      await loadList()
-    } catch (e: any) {
-      ElMessage.error(e?.message || '续传失败（已传分片会跳过，可再次尝试）')
-    } finally {
-      upload.submitting = false
-    }
-    return
-  }
-
-  if (!upload.name.trim()) return ElMessage.warning('请填写数据名称')
-  if (!upload.typeKey) return ElMessage.warning('请选择数据类型')
-  if (upload.srcMode === 'dir') return ElMessage.warning('服务器目录导入暂未开放，请使用本地上传')
-  if (!upload.file) return ElMessage.warning('请选择本地文件')
-
-  const t = curType.value!
-  const file = upload.file
-  upload.submitting = true
-  upload.progress = 0
-  try {
-    if (t.src === 'layer') {
-      // 矢量/栅格：分片上传 → 合并 → 入库（或同步建图 InsertImageLayer）
-      // 矢量：后端导入仅支持 SHP（GDAL ShpReader + UploadFile 目录中家族文件齐备），
-      // 需多选 .shp/.shx/.dbf（建议含 .prj/.cpg）一起上传；压缩包等格式无法入库
-      if (canMultiPick.value) {
-        const extent = (n: string) => n.toLowerCase().split('.').pop() || ''
-        const exts = [file, ...(upload.familyFiles || [])].map((f) => extent(f.name))
-        const allowed = ['shp', 'shx', 'dbf', 'prj', 'cpg']
-        const bad = exts.find((e) => !allowed.includes(e))
-        if (bad) {
-          throw new Error(
-            `矢量入库仅支持 SHP 系列文件（.shp/.shx/.dbf/.prj/.cpg），当前包含 .${bad}，请解压后重试`,
-          )
-        }
-        if (!exts.includes('shp') || !exts.includes('shx') || !exts.includes('dbf')) {
-          throw new Error('SHP 配套文件不完整：请一次多选 .shp + .shx + .dbf（建议含 .prj/.cpg）')
-        }
-        if (new Set(exts).size !== exts.length) throw new Error('同一 SHP 文件组中存在重复扩展名，请只选择一组数据')
-        const stems = [file, ...(upload.familyFiles || [])].map((f) => f.name.replace(/\.[^.]+$/, '').toLowerCase())
-        if (new Set(stems).size !== 1) throw new Error('SHP 配套文件必须具有相同的主文件名')
-        if ([file, ...(upload.familyFiles || [])].some((f) => f.size === 0)) throw new Error('SHP 文件组包含空文件')
-      }
-      const allFiles = [file, ...(upload.familyFiles || [])]
-      let merged: any = null
-      for (let i = 0; i < allFiles.length; i++) {
-        const f = allFiles[i]
-        const m: any = await chunkedUpload(f, (p, txt) => {
-          upload.progress = Math.round(((i + p / 100) / allFiles.length) * 100)
-          if (txt) upload.progressText = allFiles.length > 1 ? `${f.name}：${txt}` : txt
-        })
-        if (i === 0) merged = m
-      }
-      // 入库契约（LayerContentServiceImpl）：
-      //  - filePathName 传「文件名」：后端多处用 basename 与 UploadFile 目录拼接，
-      //    传全路径会在 Paths.get 多段拼接时抛 InvalidPathException（Windows 实测）
-      //  - uploadFileName 传服务端全路径（InsertImageLayer 无 filePathName query，靠它定位文件）
-      const fileNameOnly =
-        String(merged?.logicName || '').trim() ||
-        String(merged?.physicalName || '').replace(/\\/g, '/').split('/').pop() ||
-        file.name
-      const fullPath = String(merged?.physicalName || '')
-      const common = {
-        layerName: upload.name.trim(),
-        // sdms_layer.datatype 由后端在 SHP 解析完成后按实际几何类型回填（栅格由后端置为「影像」）
-        dataType: '',
-        layerType: upload.catalogId,
-        layerRefence: upload.layerRefence,
-        area: upload.area,
-        dataConfidential: upload.confidential,
-        keywords: upload.keywords,
-        layerDesc: upload.layerDesc,
-        uploadFileType: isRasterTypeKey(t.key) ? '2' : '1',
-        uploadFileName: fullPath || fileNameOnly,
-        fileSize: Math.round(file.size / 1024),
-        createBy: USER,
-      }
-      if (upload.autoMap && isRasterType.value) {
-        // 同步建图：InsertImageLayer（form 表单绑定，无 @RequestBody）入库并创建地图
-        const mapEntity: any = await layerContentApi.insertImageLayer({
-          ...common,
-          createByName: USER,
-        })
-        if (!mapEntity?.id) throw new Error('入库失败：后端未创建地图记录（详见服务端日志）')
-        ElMessage.success(`「${upload.name.trim()}」已入库并创建地图（id=${mapEntity.id}）`)
-      } else {
-        const created: any = await layerContentApi.insert(
-          { ...common, uploadStatus: '1' },
-          { filePathName: fileNameOnly, user: USER, isImport: '1' },
-        )
-        if (!created?.id) {
-          throw new Error('入库失败：后端未返回图层记录（请检查文件完整性，详见服务端日志/图层日志）')
-        }
-        await layerContentApi.updateStatus(created.id)
-        ElMessage.success(`「${upload.name.trim()}」上传入库成功`)
-      }
-    } else {
-      // 三维：init(含 srs) → 分片 → complete。
-      // TILESET 直传（zip / tileset.json）：complete 内同步解压+发布（接口已放宽超时）；
-      // 其余格式（OSGB/LAS/LAZ/OBJ/FBX/IFC，支持 zip 包）complete 后为「待转换」，列表中下发转换
-      const ext = (file.name.split('.').pop() || '').toLowerCase()
-      if (!M3D_FMT_BY_KEY[upload.typeKey]?.includes(ext)) {
-        return ElMessage.warning(
-          `数据类型「${t.label}」不支持 .${ext || '?'} 文件（允许：${M3D_FMT_BY_KEY[upload.typeKey]?.join(' / ')}）`,
-        )
-      }
-      const srcFormat = m3dSrcFormat(upload.typeKey, file.name)
-      if (!srcFormat) {
-        return ElMessage.warning(`无法识别文件「${file.name}」的三维源格式，请检查扩展名`)
-      }
-      await m3dUpload(
-        file,
-        { name: upload.name, modelType: M3D_TYPE_BY_KEY[upload.typeKey], srcFormat, srs: upload.srs, userCode: USER },
-        (p, txt) => {
-          upload.progress = p
-          if (txt) upload.progressText = txt
-        },
-      )
-      const isTilesetDirect = M3D_TYPE_BY_KEY[upload.typeKey] === 'TILESET'
-      ElMessage.success(
-        isTilesetDirect
-          ? `「${upload.name.trim()}」上传完成，现成 3DTiles 已直接发布`
-          : `「${upload.name.trim()}」上传完成，状态为「待转换」，请在列表中下发转换`,
-      )
-    }
-    upload.visible = false
-    pageIndex.value = 1
-    await Promise.all([loadList(), loadTree()])
-    notifyResourceCountChanged()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败（上传中断可稍后重试）')
-  } finally {
-    upload.submitting = false
-    upload.progressText = ''
-  }
+async function onUploaded() {
+  invalidateDatasets()
+  pageIndex.value = 1
+  await Promise.all([loadList(), loadTree()])
+  notifyResourceCountChanged()
 }
 
 /* ================= 编辑（仅名称与摘要，仅二维） ================= */
 const edit = reactive({ visible: false, saving: false, id: '', name: '', desc: '' })
 
 function openEdit(row: UnifiedRow) {
-  if (row.src === 'm3d') return
+  if (row.src === 'm3d' || rowBusy[row.key] || batchDeleting.value) return
   edit.visible = true
   edit.id = row.id
   edit.name = row.name
   edit.desc = String(row.raw?.layerDesc ?? '')
 }
 async function saveEdit() {
+  if (edit.saving) return
   if (!edit.name.trim()) return ElMessage.warning('请填写数据名称')
   edit.saving = true
   try {
@@ -718,9 +465,10 @@ async function saveEdit() {
     })
     ElMessage.success('保存成功')
     edit.visible = false
+    invalidateDatasets()
     await loadList()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     edit.saving = false
   }
@@ -767,6 +515,29 @@ const detailRows = computed<[string, string][]>(() => {
   return base
 })
 
+const ingestionReads = new Map<string, Promise<UnifiedRow>>()
+function verifyIngestion(row: UnifiedRow): Promise<UnifiedRow> {
+  if (!needsIngestionVerification(row)) return Promise.resolve(row)
+  const pending = ingestionReads.get(row.key)
+  if (pending) return pending
+  const read = layerContentApi.getDetailById(row.id).then(detail => applyIngestionDetail(row, detail))
+  ingestionReads.set(row.key, read)
+  void read.finally(() => { if (ingestionReads.get(row.key) === read) ingestionReads.delete(row.key) }).catch(() => {})
+  return read
+}
+async function confirmIngestion(row: UnifiedRow): Promise<boolean> {
+  try {
+    const verified = await verifyIngestion(row)
+    if (disposed) return false
+    Object.assign(row, verified)
+    if (row.ingestPending) {
+      ElMessage.warning('尚未确认矢量入库完成，请在详情的活动日志查看结果，稍后刷新')
+      return false
+    }
+    return true
+  } catch (error) { showError(error, '无法确认入库结果，请刷新后重试'); return false }
+}
+
 /* ================= 发布（二维 OGC / 三维下发转换） ================= */
 const publish = reactive({
   visible: false,
@@ -778,21 +549,28 @@ const publish = reactive({
 
 const publishAvail = computed(() => (publish.row ? SERVICE_FORMATS[publish.row.typeKey] || [] : []))
 
-function openPublish(row: UnifiedRow) {
+async function openPublish(row: UnifiedRow) {
+  if (rowBusy[row.key] || batchDeleting.value) return
+  if (needsIngestionVerification(row)) {
+    rowBusy[row.key] = true
+    try { if (!await confirmIngestion(row)) return } finally { rowBusy[row.key] = false }
+  }
+  const capability = getDatasetCapabilities(row)
+  if (!capability.canPublish && !capability.canConvert) return ElMessage.warning('请等待数据处理完成后再发布')
   if (row.src === 'm3d') {
-    const st = String(row.raw?.status ?? '')
-    if (st === '2' || st === '3' || st === '4') return
-    ElMessageBox.confirm(
-      `确认对「${row.name}」下发三维转换任务？转换完成后将自动发布为 3DTiles 服务。`,
-      '下发转换',
-      { type: 'info', confirmButtonText: '下发', cancelButtonText: '取消' },
-    )
-      .then(async () => {
-        await model3dApi.convert(row.id)
-        ElMessage.success('已下发转换任务，可在列表跟踪进度')
-        await loadList()
+    if (rowBusy[row.key]) return
+    rowBusy[row.key] = true
+    try {
+      await ElMessageBox.confirm(`转换「${row.name}」并发布为 3DTiles 服务？`, '转换并发布', {
+        type: 'info', confirmButtonText: '开始转换', cancelButtonText: '取消',
       })
-      .catch(() => {})
+      if (disposed) return
+      await model3dApi.convert(row.id)
+      ElMessage.success('已提交转换任务，可在列表跟踪进度')
+      invalidateDatasets()
+      await loadList()
+    } catch (error) { showError(error, '转换任务提交失败') }
+    finally { rowBusy[row.key] = false }
     return
   }
   publish.row = row
@@ -802,6 +580,7 @@ function openPublish(row: UnifiedRow) {
 }
 
 async function submitPublish() {
+  if (publish.submitting) return
   const row = publish.row
   if (!row) return
   if (!publish.name.trim()) return ElMessage.warning('请填写服务名称')
@@ -817,9 +596,10 @@ async function submitPublish() {
     }
     ElMessage.success(`服务「${publish.name.trim()}」发布请求已提交：${publish.formats.join(' / ')}`)
     publish.visible = false
+    invalidateDatasets()
     await loadList()
   } catch (e: any) {
-    ElMessage.error(e?.message || '发布失败（请确认 GeoServer 服务可用）')
+    showError(e, '发布失败（请确认 GeoServer 服务可用）')
   } finally {
     publish.submitting = false
   }
@@ -836,63 +616,117 @@ async function copySvcAddr(row: UnifiedRow) {
 
 /* ================= 删除 ================= */
 async function removeRow(row: UnifiedRow) {
-  const tip =
-    row.src === 'layer'
-      ? '删除后数据及其发布信息将被清理（DeleteLayer）。'
-      : '删除后将清理三维数据对象与转换记录。'
+  if (rowBusy[row.key] || batchDeleting.value || listError.value) return
+  rowBusy[row.key] = true
   try {
-    await ElMessageBox.confirm(`确认删除「${row.name}」？${tip}`, '删除确认', {
-      type: 'warning',
-      confirmButtonText: '确认删除',
-      cancelButtonText: '取消',
+    if (needsIngestionVerification(row) && !await confirmIngestion(row)) return
+    if (!getDatasetCapabilities(row).canDelete || svcInfo[row.key]?.tile === '切片中') return ElMessage.warning('数据正在处理，请处理结束后再删除')
+    await ElMessageBox.confirm(`确认删除「${row.name}」？数据及其发布信息将被清理。`, '删除数据', {
+      type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消',
     })
-  } catch {
-    return
-  }
-  try {
-    if (row.src === 'layer') await layerContentApi.removeLayer(row.id)
-    else await model3dApi.remove(row.id)
+    if (disposed) return
+    const removed = row.src === 'layer' ? await layerContentApi.removeLayer(row.id) : await model3dApi.remove(row.id)
+    if (removed === false) throw new Error('该数据未被删除，请刷新后重试')
+    invalidateDatasets()
+    if (rows.value.length === 1 && pageIndex.value > 1) pageIndex.value--
     ElMessage.success('已删除')
     await Promise.all([loadList(), loadTree()])
     notifyResourceCountChanged()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
-  }
+  } catch (error) { showError(error, '删除失败') }
+  finally { rowBusy[row.key] = false }
 }
 
 /* ================= 批量删除（原服务管理页并入） ================= */
+const dataTable = ref<{ clearSelection: () => void; toggleRowSelection: (row: UnifiedRow, selected: boolean) => void }>()
+function clearSelection() { dataTable.value?.clearSelection(); picked.value = new Set() }
 const picked = ref<Set<string>>(new Set())
 const batchVisible = computed(() => picked.value.size > 0)
 const batchCount = computed(() => picked.value.size)
+function isRemovableRow(row: UnifiedRow) {
+  return !rowBusy[row.key] && getDatasetCapabilities(row).canDelete && svcInfo[row.key]?.tile !== '切片中'
+}
+function togglePicked(row: UnifiedRow, checked: boolean) {
+  if (checked && (batchDeleting.value || listError.value || !isRemovableRow(row))) return
+  const next = new Set(picked.value)
+  if (checked) next.add(row.key)
+  else next.delete(row.key)
+  picked.value = next
+  dataTable.value?.toggleRowSelection(row, checked)
+}
 function onSelectionChange(selection: UnifiedRow[]) {
-  picked.value = new Set(selection.map((r) => r.key))
+  picked.value = new Set(selection.filter(isRemovableRow).map((r) => r.key))
 }
 async function batchDel() {
-  const targets = rows.value.filter((r) => picked.value.has(r.key))
+  if (batchDeleting.value || listError.value) return
+  const removable = (row: UnifiedRow) => picked.value.has(row.key) && isRemovableRow(row)
+  let targets = rows.value.filter(removable)
   if (!targets.length) return
+  batchDeleting.value = true
   try {
-    await ElMessageBox.confirm(
-      '确认删除已选中的 ' + targets.length + ' 条数据？删除后数据及其发布信息将被清理。',
-      '批量删除',
-      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
-    )
-  } catch {
-    return
-  }
-  let ok = 0
-  for (const r of targets) {
-    try {
-      if (r.src === 'layer') await layerContentApi.removeLayer(r.id)
-      else await model3dApi.remove(r.id)
-      ok++
-    } catch {
-      /* 单个失败继续 */
+    await ElMessageBox.confirm(`确认删除已选中的 ${targets.length} 条数据？数据及其发布信息将被清理。`, '批量删除', {
+      type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消',
+    })
+    if (disposed) return
+    targets = targets.filter(removable)
+    if (!targets.length) return
+    let ok = 0
+    for (const row of targets) {
+      if (disposed) return
+      rowBusy[row.key] = true
+      try {
+        const removed = row.src === 'layer' ? await layerContentApi.removeLayer(row.id) : await model3dApi.remove(row.id)
+        if (removed !== false) ok++
+      } catch { /* Report a partial result after completing the selection. */ }
+      finally { rowBusy[row.key] = false }
     }
-  }
-  ElMessage.success('已删除 ' + ok + ' 条数据')
-  picked.value = new Set()
-  await Promise.all([loadList(), loadTree()])
-  notifyResourceCountChanged()
+    if (ok === targets.length) ElMessage.success(`已删除 ${ok} 条数据`)
+    else ElMessage.warning(`已删除 ${ok} 条，${targets.length - ok} 条失败，请刷新后重试`)
+    invalidateDatasets()
+    picked.value = new Set()
+    pageIndex.value = Math.min(pageIndex.value, Math.max(1, Math.ceil((total.value - ok) / pageSize.value)))
+    await Promise.all([loadList(), loadTree()])
+    notifyResourceCountChanged()
+  } catch (error) { showError(error, '批量删除失败') }
+  finally { batchDeleting.value = false }
+}
+
+const copyingServices = ref(false)
+function exportResources(scope: 'page' | 'selected') {
+  if (disposed || loading.value || listError.value || batchDeleting.value) return ElMessage.warning('请等待列表加载成功后再导出')
+  if (scope !== 'page' && scope !== 'selected') return
+  const snapshot = rows.value.filter(row => scope === 'page' || picked.value.has(row.key))
+  try { downloadDatasetCsv(snapshot, scope); ElMessage.success(`已导出${scope === 'page' ? '当前页' : '已选'} ${snapshot.length} 条资源清单`) }
+  catch (error) { showError(error, '导出失败') }
+}
+async function copyPublishedServices() {
+  if (copyingServices.value || disposed) return
+  if (loading.value || listError.value || batchDeleting.value) return ElMessage.warning('请等待列表加载成功后再复制')
+  const selected = picked.value.size > 0
+  const targets = rows.value.filter(row => row.published && (!selected || picked.value.has(row.key)))
+    .map(row => ({ ...row, raw: { ...row.raw } }))
+  if (!targets.length) return ElMessage.warning('当前范围没有已发布资源')
+  copyingServices.value = true
+  const session = getSessionVersion()
+  try {
+    const result = await mapSettledWithConcurrency(targets, 4, async row => {
+      const addresses = await fetchAllSvcAddresses(row, { force: true })
+      return { row, addresses }
+    })
+    if (disposed || session !== getSessionVersion()) return
+    const lines: string[] = []
+    let failed = 0
+    for (const item of result) {
+      if (item.status !== 'fulfilled' || !item.value.addresses.length) { failed++; continue }
+      const name = item.value.row.name.replace(/[\t\r\n]+/g, ' ')
+      for (const address of item.value.addresses) lines.push(`${name}\t${address.type}\t${address.url}`)
+    }
+    if (!lines.length) return ElMessage.warning('暂未读取到服务地址，请稍后重试')
+    if (!await copyText(lines.join('\n'))) throw new Error('复制失败，请在服务预览中手动复制')
+    if (disposed || session !== getSessionVersion()) return
+    const message = `已复制${selected ? '已选范围' : '当前页'} ${lines.length} 个可用服务地址${failed ? `，${failed} 条资源未读取到地址` : ''}`
+    failed ? ElMessage.warning(message) : ElMessage.success(message)
+  } catch (error) { if (!disposed && session === getSessionVersion()) showError(error, '服务地址读取失败') }
+  finally { copyingServices.value = false }
 }
 
 /* ================= 预览（三维预览 / 二维已发布预览） ================= */
@@ -900,7 +734,6 @@ const previewVisible = ref(false)
 const previewRow = ref<UnifiedRow | null>(null)
 function openPreview(row: UnifiedRow) {
   if (!row.published && row.src === 'layer') return ElMessage.warning('该数据尚未发布为服务，请先发布')
-  if (svcInfo[row.key]?.tile === '切片中') return ElMessage.warning('该服务切片尚未完成，暂不可预览')
   if (row.src === 'm3d' && String(row.raw?.status ?? '') !== '4')
     return ElMessage.warning('三维数据转换发布完成后才可预览')
   previewRow.value = row
@@ -909,19 +742,19 @@ function openPreview(row: UnifiedRow) {
 
 /* ================= 行操作辅助 ================= */
 function canPublish(row: UnifiedRow): boolean {
-  if (row.src === 'layer') return true
-  const st = String(row.raw?.status ?? '')
-  return st === '1' || st === '5'
+  const capability = getDatasetCapabilities(row)
+  return capability.canPublish || capability.canConvert
 }
 function publishLabel(row: UnifiedRow): string {
   if (row.src === 'layer') return row.published ? '重新发布' : '发布'
   const st = String(row.raw?.status ?? '')
-  if (st === '1') return '发布'
-  if (st === '5') return '重试'
+  if (st === '1') return '转换并发布'
+  if (st === '5') return '重试转换'
   if (st === '4') return '复制地址'
-  return '转换中'
+  return row.statusLabel
 }
 function statusClass(r: UnifiedRow): string {
+  if (r.ingestPending) return 's-run'
   if (r.status === 'ok') return 's-ok'
   if (r.status === 'fail') return 's-err'
   return 's-run'
@@ -966,24 +799,45 @@ function onImMsg(msg: ImMessage) {
   if (imRefreshTimer) return
   imRefreshTimer = window.setTimeout(() => {
     imRefreshTimer = null
-    if (!anyDialogOpen.value) loadList(true)
+    if (!anyDialogOpen.value) { invalidateDatasetQueries(); void loadList(true) }
     if (msg.isFinish) loadTree()
   }, 1200)
 }
 
+function consumeUploadQuery() {
+  if (typeof route.query.upload !== 'string') return
+  const type = DATA_TYPES.find(item => item.key === route.query.upload)?.key
+  if (!type) return
+  openUpload(type)
+  const { upload: _upload, ...query } = route.query
+  void router.replace({ query })
+}
+watch(() => route.query.upload, consumeUploadQuery)
+watch(() => globalSearch.sequence, () => {
+  filters.type = filters.status = filters.pub = ''
+  selectedCatalog.value = ''
+  treeRef.value?.setCurrentKey?.(null)
+  filters.kw = globalSearch.submittedKeyword
+  doSearch()
+})
+watch(() => datasetListSignature(readDatasetListState(route.query)), () => {
+  const state = readDatasetListState(route.query)
+  if (datasetListSignature(state) === datasetListSignature(currentListState())) return
+  Object.assign(filters, { type: state.type, status: state.status, pub: state.pub, kw: state.kw })
+  Object.assign(applied, filters, { catalog: state.catalog })
+  selectedCatalog.value = state.catalog
+  sort.value = state.sort; order.value = state.order; pageIndex.value = state.page; pageSize.value = state.size
+  void loadList()
+})
 onMounted(async () => {
-  await loadDictOptions()
-  await loadTree()
-  await loadList()
-  loadCatalogs()
-  loadFormOptions()
+  await Promise.all([loadDictOptions().then(loadTree), loadList()])
+  if (disposed) return
   imUnsub = onImMessage(USER, onImMsg)
-  if (route.query.upload === 'raster') {
-    openUpload()
-    upload.typeKey = 'raster'
-  }
+  consumeUploadQuery()
 })
 onBeforeUnmount(() => {
+  disposed = true
+  listRequestId++
   if (pollTimer) window.clearTimeout(pollTimer)
   if (imRefreshTimer) window.clearTimeout(imRefreshTimer)
   imUnsub?.()
@@ -991,8 +845,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="manage-page">
-    <PageHead title="数据管理" sub="矢量 / 栅格 / 三维数据统一接入：目录树检索、上传、发布与预览全链路">
+  <div class="manage-page" :class="{ 'cards-view': viewMode === 'cards' }">
+    <PageHead title="数据管理" sub="上传数据并完成入库，再发布为地图服务；在列表中跟踪处理进度">
       <template #tools>
         <el-button class="btn sm catalog-trigger" @click="mobileTreeOpen = !mobileTreeOpen"><Icon name="tree" :size="13" /> {{ mobileTreeOpen ? '收起目录' : '目录筛选' }}</el-button>
         <el-button class="btn sm primary" @click="openUpload"><Icon name="plus" :size="13" /> 上传数据</el-button>
@@ -1002,11 +856,12 @@ onBeforeUnmount(() => {
     <div class="manage-body">
       <!-- 左：资源目录树（原资源总览） -->
       <div class="card tree-panel" :class="{ 'mobile-open': mobileTreeOpen }">
+        <div class="tree-caption"><Icon name="tree" :size="15" /><strong>资源目录</strong><el-button link size="small" @click="router.push('/layers')">管理目录</el-button></div>
         <div class="tree-tools">
           <el-select
             v-model="dictType"
             size="small"
-            placeholder="字典类型(dictType)"
+            placeholder="目录分类"
             clearable
             filterable
             style="width: 100%"
@@ -1020,10 +875,10 @@ onBeforeUnmount(() => {
             />
           </el-select>
         </div>
-        <div class="tree-all" :class="{ on: !selectedCatalog }" @click="clearTreeFilter">
+        <button type="button" class="tree-all" :class="{ on: !selectedCatalog }" @click="clearTreeFilter">
           <Icon name="layers" :size="13" />
           全部数据
-        </div>
+        </button>
         <div v-loading="treeLoading" class="tree-wrap">
           <el-tree
             v-if="treeData.length"
@@ -1053,194 +908,131 @@ onBeforeUnmount(() => {
       <div class="list-col">
         <div class="card filter-card">
           <div class="filters">
-            <el-select v-model="filters.type" placeholder="请选择数据类型" clearable style="width: 170px" @change="doSearch">
-              <el-option v-for="t in DATA_TYPES" :key="t.key" :label="t.label" :value="t.key" />
+            <el-select v-model="filters.type" placeholder="全部数据类型" aria-label="数据类型" clearable style="width: 170px" @change="doSearch">
+              <el-option v-for="t in DATASET_FILTER_TYPES" :key="t.key" :label="t.label" :value="t.key" />
             </el-select>
-            <el-select v-model="filters.status" placeholder="请选择上传状态" clearable style="width: 150px" @change="doSearch">
+            <el-select v-model="filters.status" placeholder="全部处理状态" aria-label="处理状态" clearable style="width: 150px" @change="doSearch">
               <el-option v-for="s in STATUS_OPTS" :key="s.value" :label="s.label" :value="s.value" />
             </el-select>
-            <el-select v-model="filters.pub" placeholder="请选择发布状态" clearable style="width: 150px" @change="doSearch">
+            <el-select v-model="filters.pub" placeholder="全部发布状态" aria-label="发布状态" clearable style="width: 150px" @change="doSearch">
               <el-option v-for="p in PUB_OPTS" :key="p.value" :label="p.label" :value="p.value" />
             </el-select>
             <el-input
               v-model="filters.kw"
-              placeholder="请输入数据名称"
+              placeholder="搜索数据名称" aria-label="数据名称"
               clearable
               style="width: 200px"
               @keyup.enter="doSearch"
               @clear="doSearch"
             />
-            <el-button class="btn sm primary" @click="doSearch">搜索</el-button>
+            <el-button class="btn sm primary" @click="doSearch"><Icon name="search" :size="13" />查询</el-button>
             <el-button class="btn sm" @click="doReset">重置</el-button>
           </div>
+          <DatasetQuickFilters :state="currentListState()" :disabled="loading || batchDeleting" @apply="applyListView" />
         </div>
 
+        <Transition name="sdms-reveal">
+        <div class="active-filters" v-if="activeFilterTags.length">
+          <span>当前筛选</span><TransitionGroup name="sdms-chip"><el-tag v-for="tag in activeFilterTags" :key="tag.key" closable size="small" @close="removeFilter(tag.key)">{{ tag.label }}</el-tag></TransitionGroup>
+          <el-button link size="small" @click="doReset">清除全部</el-button>
+        </div>
+        </Transition>
         <div class="card table-card">
-          <el-table v-loading="loading" :data="rows" size="small" height="100%" @selection-change="onSelectionChange">
-            <el-table-column type="selection" width="42" />
-            <el-table-column label="数据名称" min-width="170" show-overflow-tooltip>
+          <div class="list-toolbar">
+            <div class="list-result"><strong>数据资源</strong><span class="result-count">{{ total }}</span><span v-if="lastUpdated" class="updated-label">{{ lastUpdated }} 更新</span></div>
+            <div class="list-tools">
+              <el-dropdown trigger="click" @command="command => command === 'copy' ? copyPublishedServices() : exportResources(command)">
+                <el-button size="small" :disabled="loading || !rows.length || !!listError" :loading="copyingServices"><Icon name="download" :size="13" />清单与地址<Icon name="chevron-down" :size="14" class="dropdown-chevron" aria-hidden="true" /></el-button>
+                <template #dropdown><el-dropdown-menu>
+                  <el-dropdown-item command="page">导出当前页清单（{{ rows.length }} 条）</el-dropdown-item>
+                  <el-dropdown-item command="selected" :disabled="!picked.size">导出已选清单（{{ picked.size }} 条）</el-dropdown-item>
+                  <el-dropdown-item command="copy" divided>{{ picked.size ? '复制已选资源服务地址' : '复制当前页服务地址' }}</el-dropdown-item>
+                </el-dropdown-menu></template>
+              </el-dropdown>
+              <el-select :model-value="sort + ':' + order" aria-label="数据排序" size="small" class="sort-select" @change="changeSort">
+                <el-option label="最新上传" value="time:desc" /><el-option label="最早上传" value="time:asc" /><el-option label="名称 A → Z" value="name:asc" /><el-option label="文件由大到小" value="size:desc" />
+              </el-select>
+              <el-button size="small" aria-label="刷新数据列表" :loading="loading" @click="refreshList"><Icon name="refresh" :size="13" /><span class="refresh-label">刷新</span></el-button>
+              <div class="view-toggle" role="group" aria-label="列表显示方式">
+                <button type="button" :class="{ active: viewMode === 'table' }" :aria-pressed="viewMode === 'table'" aria-label="表格视图" @click="setViewMode('table')"><Icon name="list" :size="16" /></button>
+                <button type="button" :class="{ active: viewMode === 'cards' }" :aria-pressed="viewMode === 'cards'" aria-label="卡片视图" @click="setViewMode('cards')"><Icon name="grid" :size="15" /></button>
+              </div>
+            </div>
+          </div>
+          <el-alert v-if="listError" :title="listError + (rows.length ? '；以下保留上次加载结果' : '')" type="error" show-icon :closable="false"><el-button link @click="loadList()">重新加载</el-button></el-alert>
+          <el-table ref="dataTable" class="dataset-table" row-key="key" v-loading="loading" :data="rows" size="small" height="100%" @selection-change="onSelectionChange">
+            <el-table-column type="selection" width="42" :selectable="(row: UnifiedRow) => !listError && !batchDeleting && isRemovableRow(row)" />
+            <el-table-column label="数据名称" min-width="200" show-overflow-tooltip>
               <template #default="{ row }: any">
-                <a class="row-link" @click="openDetail(row)">{{ row.name }}</a>
+                <div class="dataset-name-cell"><DatasetTypeMark :type="row.typeKey" :title="row.typeLabel" size="small" /><div><button class="row-link" type="button" @click="openDetail(row)">{{ row.name }}</button><span class="row-secondary">{{ row.format }}<span v-if="row.spatialRef"> · {{ row.spatialRef }}</span></span></div></div>
               </template>
             </el-table-column>
-            <el-table-column label="数据类型" width="126">
-              <template #default="{ row }: any">
-                <span class="tag" :class="row.src === 'm3d' ? 'violet' : row.typeKey === 'raster' ? 'orange' : 'blue'">
-                  {{ row.typeLabel }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column label="数据格式" width="84">
-              <template #default="{ row }: any"><span class="fmt">{{ row.format }}</span></template>
-            </el-table-column>
-            <el-table-column label="分类" width="104" show-overflow-tooltip>
+            <el-table-column label="分类" width="90" show-overflow-tooltip>
               <template #default="{ row }: any">{{ row.category || '—' }}</template>
             </el-table-column>
-            <el-table-column label="空间参考" width="128" show-overflow-tooltip>
-              <template #default="{ row }: any">{{ row.spatialRef || '—' }}</template>
-            </el-table-column>
-            <el-table-column label="数据大小" width="88">
+            <el-table-column label="数据大小" width="82">
               <template #default="{ row }: any">{{ row.size }}</template>
             </el-table-column>
-            <el-table-column label="上传人" width="92" show-overflow-tooltip>
-              <template #default="{ row }: any">{{ row.uploader }}</template>
-            </el-table-column>
-            <el-table-column width="152">
+            <el-table-column width="144">
               <template #header>
-                <span class="th-sort" @click="toggleOrder">
+                <button type="button" class="th-sort" aria-label="切换上传时间排序" @click="toggleOrder">
                   上传时间
                   <span class="arrows" :class="order"><i></i><i></i></span>
-                </span>
+                </button>
               </template>
               <template #default="{ row }: any"><span class="muted">{{ fmtTimeCol(row.time) }}</span></template>
             </el-table-column>
-            <el-table-column label="上传状态" width="164">
+            <el-table-column label="处理 / 服务状态" width="180">
               <template #default="{ row }: any">
                 <div class="status" :class="statusClass(row)">
                   <span class="d"></span>{{ row.statusLabel }}
-                  <template v-if="row.status === 'uploading' || row.status === 'converting'"> {{ row.progress }}%</template>
+                  <template v-if="!row.ingestPending && (row.status === 'uploading' || row.status === 'converting')"> {{ row.progress }}%</template>
                 </div>
-                <div v-if="row.status === 'uploading' || row.status === 'converting'" class="pbar">
+                <div v-if="!row.ingestPending && (row.status === 'uploading' || row.status === 'converting')" class="pbar">
                   <i :style="{ width: Math.max(4, row.progress) + '%' }"></i>
                 </div>
+                <div class="row-secondary service-summary" :title="svcInfo[row.key]?.error">
+                  <span :class="row.published ? 'published-label' : ''">{{ row.published ? '已发布' : '未发布' }}</span>
+                  <span v-if="svcInfo[row.key]?.formats?.length"> · {{ svcInfo[row.key].formats.join(' / ') }}</span>
+                  <span v-else-if="svcInfo[row.key]?.error"> · 服务暂不可用</span>
+                  <span v-if="svcInfo[row.key]?.tile === '切片中'"> · 切片中</span>
+                </div>
               </template>
             </el-table-column>
-            <el-table-column label="发布" width="72">
+            <el-table-column label="操作" width="174" fixed="right">
               <template #default="{ row }: any">
-                <span class="tag" :class="row.published ? 'green' : 'gray'">
-                  {{ row.published ? '已发布' : '未发布' }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column label="服务格式" width="118">
-              <template #default="{ row }: any">
-                <template v-if="svcInfo[row.key]?.formats?.length">
-                  <span class="svc-fmts">{{ svcInfo[row.key].formats.join(' / ') }}</span>
-                  <span v-if="svcInfo[row.key]?.tile === '切片中'" class="tag orange" style="margin-left: 4px">切片中</span>
-                </template>
-                <span v-else class="muted">—</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="318" fixed="right">
-              <template #default="{ row }: any">
-                <!-- 二维 -->
-                <template v-if="row.src === 'layer'">
-                  <el-button
-                    v-if="row.published"
-                    class="op"
-                    link
-                    type="primary"
-                    size="small"
-                    @click="copySvcAddr(row)"
-                  >复制地址</el-button>
-                  <span v-if="row.published" class="op-sep">|</span>
-                  <el-button
-                    class="op"
-                    link
-                    type="primary"
-                    size="small"
-                    @click="openEdit(row)"
-                  >编辑</el-button>
-                  <span class="op-sep">|</span>
-                  <el-button class="op" link type="primary" size="small" @click="openDetail(row)">详情</el-button>
-                  <span class="op-sep">|</span>
-                  <el-button v-if="row.typeKey === 'vector'" class="op" link type="primary" size="small" @click="openDetail(row, 'data')">属性</el-button>
-                  <span v-if="row.typeKey === 'vector'" class="op-sep">|</span>
-                  <el-button class="op" link type="primary" size="small" @click="openPublish(row)">
-                    {{ publishLabel(row) }}
-                  </el-button>
-                  <span class="op-sep">|</span>
-                  <el-button class="op del" link type="danger" size="small" @click="removeRow(row)">删除</el-button>
-                </template>
-                <!-- 三维：下发转换 / 重试 / 复制地址 / 三维预览 -->
-                <template v-else>
-                  <el-button
-                    v-if="canPublish(row)"
-                    class="op"
-                    link
-                    type="primary"
-                    size="small"
-                    @click="openPublish(row)"
-                  >{{ publishLabel(row) }}</el-button>
-                  <el-button
-                    v-else-if="String(row.raw?.status ?? '') === '4'"
-                    class="op"
-                    link
-                    type="primary"
-                    size="small"
-                    @click="copySvcAddr(row)"
-                  >复制地址</el-button>
-                  <span v-else class="op-dis">{{ publishLabel(row) }}</span>
-                  <span class="op-sep">|</span>
-                  <el-button
-                    class="op"
-                    link
-                    type="primary"
-                    size="small"
-                    :disabled="String(row.raw?.status ?? '') !== '4'"
-                    :title="String(row.raw?.status ?? '') === '4' ? '' : '转换发布完成后可预览'"
-                    @click="openPreview(row)"
-                  >预览</el-button>
-                  <span class="op-sep">|</span>
-                  <el-button class="op" link type="primary" size="small" @click="openDetail(row)">详情</el-button>
-                  <span class="op-sep">|</span>
-                  <el-button class="op del" link type="danger" size="small" @click="removeRow(row)">删除</el-button>
-                </template>
+                <DatasetRowActions :row="row" :busy="rowBusy[row.key] || batchDeleting" :deleting-disabled="!!listError || svcInfo[row.key]?.tile === '切片中'" :publish-label="publishLabel(row)" @detail="tab => openDetail(row, tab)" @publish="openPublish(row)" @preview="openPreview(row)" @copy="copySvcAddr(row)" @edit="openEdit(row)" @remove="removeRow(row)" />
               </template>
             </el-table-column>
             <template #empty>
-              <el-empty description="暂无数据（请确认后端 geodata-service 已启动并已建库）" :image-size="80" />
+              <DatasetEmptyState :error="listError" :filtered="hasFilters" :loading="loading" @retry="refreshList" @reset="doReset" @upload="openUpload" />
             </template>
           </el-table>
           <div v-loading="loading" class="mobile-list">
-            <div v-for="row in rows" :key="row.key" class="mobile-record">
+            <div v-for="(row, index) in rows" :key="row.key" class="mobile-record" :class="{ selected: picked.has(row.key) }" :style="{ '--motion-index': Math.min(index, 7) }">
               <div class="mobile-record-head">
-                <button class="mobile-name" type="button" @click="openDetail(row)">{{ row.name }}</button>
+                <DatasetTypeMark :type="row.typeKey" /><button class="mobile-name" type="button" @click="openDetail(row)">{{ row.name }}</button>
                 <span class="tag" :class="row.published ? 'green' : 'gray'">{{ row.published ? '已发布' : '未发布' }}</span>
               </div>
               <div class="mobile-record-meta">
-                <span>{{ row.typeLabel }} · {{ row.format }}</span>
+                <span>{{ row.typeLabel }} · {{ row.format }}</span><span>{{ row.spatialRef || '未登记空间参考' }}</span>
                 <span>{{ row.size }}</span>
                 <span>{{ fmtTimeCol(row.time) }}</span>
                 <span class="status" :class="statusClass(row)"><i class="d"></i>{{ row.statusLabel }}</span>
               </div>
               <div v-if="svcInfo[row.key]?.formats?.length" class="mobile-service">服务：{{ svcInfo[row.key].formats.join(' / ') }}</div>
               <div class="mobile-actions">
-                <el-button v-if="row.src === 'layer' && row.typeKey === 'vector'" link type="primary" @click="openDetail(row, 'data')">属性</el-button>
-                <el-button v-if="row.src === 'layer'" link type="primary" @click="openPublish(row)">{{ publishLabel(row) }}</el-button>
-                <el-button v-else-if="canPublish(row)" link type="primary" @click="openPublish(row)">{{ publishLabel(row) }}</el-button>
-                <el-button v-if="row.published" link type="primary" @click="copySvcAddr(row)">复制地址</el-button>
-                <el-button v-if="row.src === 'm3d' && row.published" link type="primary" @click="openPreview(row)">预览</el-button>
-                <el-button v-if="row.src === 'layer'" link type="primary" @click="openEdit(row)">编辑</el-button>
-                <el-button link type="danger" @click="removeRow(row)">删除</el-button>
+                <el-checkbox :model-value="picked.has(row.key)" :disabled="!!listError || batchDeleting || !isRemovableRow(row)" :aria-label="'选择' + row.name" @change="value => togglePicked(row, Boolean(value))" />
+                <DatasetRowActions :row="row" :busy="rowBusy[row.key] || batchDeleting" :deleting-disabled="!!listError || svcInfo[row.key]?.tile === '切片中'" :publish-label="publishLabel(row)" @detail="tab => openDetail(row, tab)" @publish="openPublish(row)" @preview="openPreview(row)" @copy="copySvcAddr(row)" @edit="openEdit(row)" @remove="removeRow(row)" />
               </div>
             </div>
-            <el-empty v-if="!loading && !rows.length" description="暂无数据" :image-size="64" />
+            <DatasetEmptyState v-if="!rows.length" :error="listError" :filtered="hasFilters" :loading="loading" @retry="refreshList" @reset="doReset" @upload="openUpload" />
           </div>
-          <div v-if="batchVisible" class="batch-bar">
-            <span>已选择 <b>{{ batchCount }}</b> 项</span>
-            <el-button class="btn sm danger" @click="batchDel">批量删除</el-button>
-          </div>
+          <Transition name="sdms-reveal"><div v-if="batchVisible" class="batch-bar">
+            <span>已选择 <b>{{ batchCount }}</b> 项</span><el-button link @click="clearSelection">取消选择</el-button>
+            <el-button link type="primary" @click="exportResources('selected')">导出清单</el-button>
+            <el-button class="btn sm danger" :loading="batchDeleting" @click="batchDel">批量删除</el-button>
+          </div></Transition>
           <div class="pager">
             <span class="mobile-total">共 {{ total }} 条</span>
             <el-pagination
@@ -1250,198 +1042,21 @@ onBeforeUnmount(() => {
               :page-sizes="[10, 20, 50]"
               layout="total, sizes, prev, pager, next"
               small
-              @current-change="() => loadList()"
-              @size-change="pageIndex = 1; loadList()"
+              @change="onPaginationChange"
+              @size-change="pageIndex = 1"
             />
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 上传数据（右侧抽屉，全量字段） -->
-    <el-drawer v-model="upload.visible" title="上传数据" size="min(560px, 100vw)" :close-on-click-modal="false">
-      <div class="dlg-body">
-        <div class="grid2">
-          <div class="field">
-            <label><i class="req">*</i>数据名称</label>
-            <el-input v-model="upload.name" placeholder="如：20230131test1111" />
-          </div>
-          <div class="field">
-            <label><i class="req">*</i>数据类型</label>
-            <el-select v-model="upload.typeKey" placeholder="请选择数据类型" style="width: 100%">
-              <el-option v-for="t in DATA_TYPES" :key="t.key" :label="t.label" :value="t.key" />
-            </el-select>
-          </div>
-        </div>
-
-        <!-- 所属目录（原新建资源表单字段） -->
-        <div v-if="isLayerType" class="field">
-          <label>所属目录</label>
-          <el-select v-model="upload.catalogId" placeholder="选择目录（layerType，选填）" clearable filterable style="width: 100%">
-            <el-option v-for="c in catalogOptions" :key="c.id" :label="c.label" :value="c.id" />
-          </el-select>
-        </div>
-
-        <!-- 空间参考：二维走字典下拉（layerRefence），三维为文本（srs） -->
-        <div class="field">
-          <label>空间参考系</label>
-          <el-select
-            v-if="isLayerType"
-            v-model="upload.layerRefence"
-            placeholder="坐标系（如 GCS_WGS_1984 (4326)）"
-            clearable
-            filterable
-            style="width: 100%"
-          >
-            <el-option
-              v-for="d in srsOptions"
-              :key="d.id || d.code"
-              :label="d.codeName || d.code"
-              :value="d.codeName || d.code"
-            />
-          </el-select>
-          <el-input v-else-if="isM3dType" v-model="upload.srs" placeholder="如 EPSG:4326 / GCS_WGS_1984" />
-        </div>
-
-        <div v-if="isLayerType" class="grid2">
-          <div class="field">
-            <label>行政区划</label>
-            <el-select v-model="upload.area" placeholder="行政区划" clearable filterable style="width: 100%">
-              <el-option
-                v-for="a in areaOptions"
-                :key="a.id ?? a.code"
-                :label="a.areaName ?? a.name ?? a.code"
-                :value="a.areaName ?? a.name ?? a.code"
-              />
-            </el-select>
-          </div>
-          <div class="field">
-            <label>数据密级</label>
-            <el-select v-model="upload.confidential" style="width: 100%">
-              <el-option label="内部" value="内部" />
-              <el-option label="公开" value="公开" />
-              <el-option label="涉密" value="涉密" />
-            </el-select>
-          </div>
-        </div>
-
-        <div v-if="isLayerType" class="field">
-          <label>数据标签</label>
-          <el-input v-model="upload.keywords" placeholder="多个标签以逗号分隔" />
-        </div>
-
-        <div class="field">
-          <label>
-            <i class="req">*</i>数据来源
-            <span v-if="upload.srcMode !== 'resume'" class="fmt-trigger" title="查看支持的数据格式" @click.stop="fmtPopVisible = !fmtPopVisible">!</span>
-          </label>
-          <div v-if="fmtPopVisible && upload.srcMode !== 'resume'" class="fmt-pop" @click.stop>
-            <div class="fmt-pop-head">支持的数据格式</div>
-            <div class="fmt-box">
-              <div v-for="t in DATA_TYPES" :key="t.key" class="fmt-row">
-                <span class="t">{{ t.label }}</span>
-                <span class="f"><b v-for="f in t.formats" :key="f">{{ f }}</b></span>
-              </div>
-            </div>
-            <div class="fmt-note">上传时平台按文件扩展名自动读取数据格式（如 .shp → SHP、.tif → GeoTIFF），并回填到列表。</div>
-          </div>
-          <div class="src-row">
-            <el-radio-group v-model="upload.srcMode">
-              <el-radio value="local">本地上传文件</el-radio>
-              <el-radio value="dir" disabled title="后端暂未提供服务器目录导入端点">服务器目录上传</el-radio>
-              <el-radio v-if="isM3dType" value="resume">三维断点续传</el-radio>
-            </el-radio-group>
-          </div>
-
-          <!-- 三维断点续传（原三维数据页） -->
-          <template v-if="upload.srcMode === 'resume'">
-            <div class="field">
-              <label>任务 id</label>
-              <el-input v-model="upload.resumeId" placeholder="原上传 init 返回的数据 id" />
-              <div class="hint">流程：GET /model3d/{id}/parts 查已传分片 → 跳过已有分片续传 → complete 完成。须与原任务为同一文件。</div>
-            </div>
-            <button class="btn sm" type="button" @click="uploadInputRef?.click()">
-              <Icon name="file" :size="13" /> 选择文件（与原任务相同）
-            </button>
-            <div v-if="upload.file" class="file-chip">
-              <Icon name="file" :size="14" />
-              <span class="nm">{{ upload.file.name }}</span>
-              <span>{{ (upload.file.size / 1024 / 1024).toFixed(1) }}MB</span>
-              <span class="x" @click.stop="removeFile">移除</span>
-            </div>
-          </template>
-
-          <!-- 本地上传 -->
-          <template v-else>
-            <div
-              class="drop"
-              :class="{ over: dragOver }"
-              @click="uploadInputRef?.click()"
-              @dragover.prevent="dragOver = true"
-              @dragleave="dragOver = false"
-              @drop.prevent="onDropFile"
-            >
-              <div class="big"><b>点击选择</b> 或 将本地文件拖拽到此处</div>
-              <div class="small">
-                矢量：SHP 系列（可一次多选 .shp/.shx/.dbf/.prj/.cpg）；栅格：GeoTIFF；三维：OSGB / LAS / LAZ / OBJ / FBX / IFC / 3DTiles（支持 zip 包）；单文件建议不超过 50GB
-              </div>
-            </div>
-            <input
-              ref="uploadInputRef"
-              type="file"
-              class="hidden"
-              :accept="uploadAccept"
-              :multiple="canMultiPick"
-              @change="onPickFile"
-            />
-
-            <div v-if="upload.file" class="file-chip">
-              <Icon name="file" :size="14" />
-              <span class="nm">{{ upload.file.name }}</span>
-              <span>{{ (upload.file.size / 1024 / 1024).toFixed(1) }}MB</span>
-              <span v-if="upload.familyFiles.length">+{{ upload.familyFiles.length }} 个配套文件</span>
-              <span v-if="isM3dType">计划 {{ Math.max(1, Math.ceil(upload.file.size / (5 * 1024 * 1024))) }} 片</span>
-              <span class="x" @click.stop="removeFile">移除</span>
-            </div>
-          </template>
-
-          <div v-if="upload.submitting || upload.progress > 0" class="bar"><i :style="{ width: upload.progress + '%' }"></i></div>
-          <div v-if="upload.submitting && upload.progressText" class="prog-txt">
-            <span>{{ upload.progressText }}</span><span>{{ upload.progress }}%</span>
-          </div>
-
-          <!-- 同步建图（原数据接入，栅格专属） -->
-          <el-checkbox v-if="isRasterType && upload.srcMode === 'local'" v-model="upload.autoMap" class="automap">
-            入库同时创建地图（InsertImageLayer）
-          </el-checkbox>
-
-          <div v-if="upload.srcMode !== 'resume'" class="detect" :class="detectClass">{{ detectText }}</div>
-          <div v-else class="detect">续传按 5MiB 分片进行，已传分片自动跳过；完成后状态为「待转换」。</div>
-        </div>
-
-        <div class="field" style="margin-bottom: 0">
-          <label>{{ isLayerType ? '摘要 / 备注' : '备注' }}</label>
-          <el-input
-            v-model="upload.layerDesc"
-            type="textarea"
-            :rows="3"
-            placeholder="选填，如数据范围、坐标系、密级等说明"
-          />
-        </div>
-      </div>
-      <template #footer>
-        <el-button class="btn" @click="upload.visible = false">取消</el-button>
-        <el-button class="btn primary" :loading="upload.submitting" @click="submitUpload">
-          {{ upload.submitting ? `上传中 ${upload.progress}%` : upload.srcMode === 'resume' ? '开始续传' : '上传' }}
-        </el-button>
-      </template>
-    </el-drawer>
+    <DatasetUploadDrawer ref="uploadDrawer" @uploaded="onUploaded" />
 
     <!-- 编辑数据 -->
     <el-dialog v-model="edit.visible" title="编辑数据" width="560px" :close-on-click-modal="false">
       <div class="field">
         <label><i class="req">*</i>数据名称</label>
-        <el-input v-model="edit.name" />
+        <el-input v-model="edit.name" :disabled="edit.saving" maxlength="100" />
       </div>
       <div class="grid2">
         <div class="field"><label>数据类型</label><el-input disabled model-value="系统记录，不可修改" /></div>
@@ -1449,11 +1064,11 @@ onBeforeUnmount(() => {
       </div>
       <div class="field" style="margin-bottom: 0">
         <label>摘要 / 备注</label>
-        <el-input v-model="edit.desc" type="textarea" :rows="3" placeholder="选填，如数据范围、坐标系、密级等说明" />
+        <el-input v-model="edit.desc" :disabled="edit.saving" type="textarea" maxlength="500" :rows="3" placeholder="选填，如数据范围、坐标系、密级等说明" />
         <div class="hint">仅支持修改数据名称与摘要；其余属性由系统记录，不可修改。</div>
       </div>
       <template #footer>
-        <el-button class="btn" @click="edit.visible = false">取消</el-button>
+        <el-button class="btn" :disabled="edit.saving" @click="edit.visible = false">取消</el-button>
         <el-button class="btn primary" :loading="edit.saving" @click="saveEdit">保存</el-button>
       </template>
     </el-dialog>
@@ -1480,7 +1095,7 @@ onBeforeUnmount(() => {
       <div class="grid2">
         <div class="field">
           <label><i class="req">*</i>服务名称</label>
-          <el-input v-model="publish.name" placeholder="如：DOM 正射影像服务" />
+          <el-input v-model="publish.name" :disabled="publish.submitting" placeholder="如：DOM 正射影像服务" />
         </div>
         <div class="field">
           <label>数据类型</label>
@@ -1489,322 +1104,143 @@ onBeforeUnmount(() => {
       </div>
       <div class="field">
         <label><i class="req">*</i>服务格式（可多选）</label>
-        <el-checkbox-group v-model="publish.formats">
+        <el-checkbox-group v-model="publish.formats" :disabled="publish.submitting">
           <el-checkbox v-for="f in publishAvail" :key="f" :value="f">{{ f }}</el-checkbox>
         </el-checkbox-group>
-        <div class="hint">矢量可选 WMS / WFS，栅格可选 WMS / WMTS；发布由 GeoServer 完成，勾选 WMTS 会触发切片任务。</div>
+        <div class="hint">矢量可选 WMS / WFS / MVT，栅格可选 WMS / WMTS；发布由 GeoServer 完成，勾选 WMTS 会触发切片任务。</div>
       </div>
       <template #footer>
-        <el-button class="btn" @click="publish.visible = false">取消</el-button>
+        <el-button class="btn" :disabled="publish.submitting" @click="publish.visible = false">取消</el-button>
         <el-button class="btn primary" :loading="publish.submitting" @click="submitPublish">确定</el-button>
       </template>
     </el-dialog>
 
     <!-- 数据详情（二维六页签抽屉，复用原资源总览组件） -->
-    <ResourceDetail v-model="drawerVisible" :layer="drawerLayer" :initial-tab="drawerTab" @changed="loadList" />
+    <ResourceDetail v-if="drawerVisible" v-model="drawerVisible" :layer="drawerLayer" :initial-tab="drawerTab" @changed="onUploaded" />
 
     <!-- 全屏预览 -->
-    <ServicePreview v-model="previewVisible" :row="previewRow" />
+    <ServicePreview v-if="previewVisible" v-model="previewVisible" :row="previewRow" />
   </div>
 </template>
 
 <style scoped>
-.manage-page {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+.manage-page { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.manage-body { flex: 1; display: flex; gap: 16px; min-height: 0; }
+.catalog-trigger, .mobile-list, .mobile-total { display: none; }
+.tree-panel { width: 216px; flex: 0 0 216px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.tree-caption { display: flex; align-items: center; justify-content: space-between; padding: 16px 14px 12px; font-size: 13px; font-weight: 600; }
+.tree-caption a { font-size: 11px; font-weight: 400; }
+.tree-tools { padding: 0 12px 12px; border-bottom: 1px solid var(--line); }
+.tree-all { display: flex; align-items: center; gap: 8px; min-height: 34px; margin: 10px 8px 4px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; font: inherit; color: var(--ink-2); cursor: pointer; text-align: left; }
+.tree-all:hover { background: var(--panel-2); }
+.tree-all.on { background: var(--primary-050); color: var(--primary); font-weight: 600; }
+.tree-wrap { flex: 1; overflow: auto; padding: 0 6px 12px; min-height: 0; }
+.tree-wrap :deep(.el-tree-node__content) { height: 34px; border-radius: 4px; }
+.tree-node { display: flex; align-items: center; gap: 6px; font-size: 12px; width: 100%; min-width: 0; }
+.tree-node.islayer .tn-name { color: var(--ink-2); }
+.tn-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tn-cnt { margin-left: auto; font-size: 10px; color: var(--ink-3); padding: 0 6px; background: var(--panel-2); border-radius: 8px; }
+.list-col { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; gap: 12px; }
+.filter-card { padding: 14px; animation: sdms-fade-in var(--motion-slow) ease-out 40ms backwards; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; align-items: center; }
+.filters :deep(.el-select) { flex: 1 1 130px; min-width: 120px; }
+.filters :deep(.el-input) { flex: 1.3 1 170px; }
+.filters :deep(.el-button + .el-button) { margin-left: 0; }
+.active-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 11px; color: var(--ink-3); padding: 0 2px; }
+.active-filters :deep(.el-tag) { max-width: 250px; }
+.table-card { animation: sdms-fade-in var(--motion-slow) ease-out 90ms backwards; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.list-toolbar { min-height: 58px; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
+.list-result { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
+.list-result strong { font-size: 13px; font-weight: 600; }
+.result-count { min-width: 23px; text-align: center; background: var(--primary-050); color: var(--primary); font-size: 11px; padding: 0 6px; border-radius: 4px; }
+.updated-label { font-size: 10px; color: var(--ink-3); }
+.list-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.dropdown-chevron { flex: 0 0 auto; margin-left: 2px; }
+.list-toolbar { flex-wrap: wrap; }
+.batch-bar { flex-wrap: wrap; }
+.sort-select { width: 130px; }
+.view-toggle { display: flex; border: 1px solid var(--line); border-radius: 5px; padding: 2px; }
+.view-toggle button { transition: background-color var(--motion-base), color var(--motion-base), transform var(--motion-base); display: grid; place-items: center; padding: 3px 7px; border: 0; background: transparent; color: var(--ink-3); border-radius: 3px; cursor: pointer; }
+.view-toggle button.active { background: var(--primary-050); color: var(--primary); }
+.dataset-table { flex: 1; min-height: 0; --el-table-row-hover-bg-color: #f7faff; }
+.dataset-table :deep(.el-table__cell) { padding: 12px 0; }
+.dataset-table :deep(th.el-table__cell) { font-weight: 500; font-size: 11.5px; padding: 10px 0; }
+.dataset-name-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dataset-name-cell > div { min-width: 0; }
+.row-link { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; font: inherit; color: var(--ink); font-weight: 500; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.row-link:hover, .mobile-name:hover { color: var(--primary); }
+.row-secondary { display: block; color: var(--ink-3); font-size: 10.5px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th-sort { cursor: pointer; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; display: inline-flex; align-items: center; }
+.arrows { display: inline-flex; flex-direction: column; margin-left: 5px; gap: 2px; }
+.arrows i { width: 0; height: 0; border-left: 3px solid transparent; border-right: 3px solid transparent; }
+.arrows i:first-child { border-bottom: 4px solid #c3cad6; }
+.arrows i:last-child { border-top: 4px solid #c3cad6; }
+.arrows.asc i:first-child { border-bottom-color: var(--primary); }
+.arrows.desc i:last-child { border-top-color: var(--primary); }
+.status { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 12px; }
+.status .d { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; background: currentColor; }
+.s-ok { color: var(--ok); }.s-err { color: var(--danger); }.s-run { color: var(--warn); }
+.s-run .d { animation: sdms-status-pulse 2.2s ease-in-out infinite; }
+.pbar { margin-top: 5px; height: 3px; border-radius: 2px; background: #eef1f6; overflow: hidden; width: 110px; }
+.pbar i { display: block; height: 100%; position: relative; overflow: hidden; background: #dc9b32; transition: width var(--motion-slow) var(--motion-ease); }
+.pbar i::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgb(255 255 255 / 55%), transparent); animation: sdms-progress-sheen 1.5s ease-in-out infinite; }
+.published-label { color: var(--ok); }
+.svc-fmts { font-size: 11px; color: var(--ink-2); }
+.batch-bar { display: flex; align-items: center; gap: 12px; padding: 9px 16px; font-size: 12px; color: var(--ink-2); border-top: 1px solid var(--line); background: var(--primary-050); }
+.batch-bar b { color: var(--primary); }
+.table-card .pager { padding: 12px 16px; display: flex; justify-content: flex-end; border-top: 1px solid var(--line); }
+.cards-view .dataset-table { display: none; }
+.cards-view .mobile-list { display: grid; }
+.mobile-list { grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; padding: 16px; overflow: auto; flex: 1; align-content: start; }
+.mobile-record { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 7px; background: #fff; animation: sdms-rise-in 420ms var(--motion-ease) calc(var(--motion-index, 0) * 40ms) backwards; transition: border-color var(--motion-base), background-color var(--motion-base), box-shadow var(--motion-base), transform var(--motion-base) var(--motion-ease); }
+.mobile-record.selected { border-color: #a6c9ed; background: #f8fbff; box-shadow: 0 0 0 1px #d5e7f8; }
+.mobile-record:focus-within { border-color: #9ebfe0; }
+@media (hover: hover) and (pointer: fine) {
+  .mobile-record:hover { border-color: #bdd1e6; transform: translateY(-3px); box-shadow: 0 7px 20px rgb(24 70 119 / 8%); }
+  .mobile-record:hover :deep(.dataset-mark) { transform: translateY(-1px) rotate(-4deg); }
 }
-.manage-body {
-  flex: 1;
-  display: flex;
-  gap: 12px;
-  min-height: 0;
-}
-.catalog-trigger,
-.mobile-list,
-.mobile-total { display: none; }
-
-/* ---------- 左：目录树 ---------- */
-.tree-panel {
-  width: 252px;
-  flex: 0 0 252px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.tree-tools {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--line);
-}
-.tree-all {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 32px;
-  margin: 8px 8px 0;
-  padding: 0 9px;
-  border-radius: 6px;
-  font-size: 12.5px;
-  color: var(--ink-2);
-  cursor: pointer;
-  user-select: none;
-}
-.tree-all:hover {
-  background: var(--panel-2);
-}
-.tree-all.on {
-  background: var(--primary-050);
-  color: var(--primary);
-  font-weight: 600;
-}
-.tree-wrap {
-  flex: 1;
-  overflow: auto;
-  padding: 4px 6px 12px;
-  min-height: 0;
-}
-.tree-node {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  width: 100%;
-  min-width: 0;
-}
-.tree-node.islayer .tn-name {
-  color: var(--ink-2);
-}
-.tn-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tn-cnt {
-  margin-left: auto;
-  font-size: 10.5px;
-  color: var(--ink-3);
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 0 5px;
-}
-
-/* ---------- 右：筛选 + 表格 ---------- */
-.list-col {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-.filter-card {
-  padding: 12px 14px 2px;
-}
-.table-card {
-  margin-top: 12px;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  padding: 4px 6px 0;
-}
-.table-card .pager {
-  padding: 10px 8px;
-  display: flex;
-  justify-content: flex-end;
+.mobile-record-head { display: flex; align-items: center; gap: 10px; }
+.mobile-record-head .tag { margin-left: auto; flex-shrink: 0; font-size: 10px; }
+.mobile-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; }
+.mobile-record-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 10px; margin-top: 15px; color: var(--ink-3); font-size: 11px; }
+.mobile-record-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-record-meta > span:first-child { color: var(--ink-2); }
+.mobile-service { margin-top: 10px; color: var(--ink-2); font-size: 11px; }
+.mobile-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--line); }
+.mobile-actions :deep(.el-checkbox) { height: 24px; margin-right: 0; }
+.mobile-list > :deep(.dataset-empty) { grid-column: 1 / -1; }
+@media (max-width: 1280px) {
+  .catalog-trigger { display: inline-flex; }
+  .manage-body { position: relative; }
+  .tree-panel { display: none; position: absolute; top: 0; left: 0; bottom: 0; z-index: 4; width: 240px; box-shadow: var(--sh-2); }
+  .tree-panel.mobile-open { display: flex; animation: sdms-rise-in var(--motion-base) var(--motion-ease); }
 }
 @media (max-width: 900px) {
-  .catalog-trigger { display: inline-flex; }
-  .manage-body {
-    overflow-y: auto;
-    flex-direction: column;
-  }
-  .tree-panel {
-    display: none;
-    width: 100%;
-    flex: none;
-    max-height: 260px;
-  }
-  .tree-panel.mobile-open { display: flex; }
-  .list-col { flex: none; }
-  .table-card { min-height: 420px; }
-}
-@media (max-width: 700px) {
   .manage-page { height: auto; min-height: 100%; }
-  .manage-body { overflow: visible; }
-  .filter-card { padding: 12px 12px 2px; }
-  .filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .filters :deep(.el-select),
-  .filters :deep(.el-input) { width: 100% !important; min-width: 0; }
-  .table-card { min-height: 0; padding: 0; overflow: hidden; }
-  .table-card > :deep(.el-table) { display: none; }
-  .mobile-list { display: block; padding: 9px; min-height: 180px; }
-  .mobile-record {
-    padding: 12px;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: #fff;
-  }
-  .mobile-record + .mobile-record { margin-top: 9px; }
-  .mobile-record-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
-  .mobile-name { padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer; }
-  .mobile-name:hover { color: var(--primary); }
-  .mobile-record-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; margin-top: 8px; color: var(--ink-3); font-size: 11.5px; }
-  .mobile-service { margin-top: 7px; color: var(--ink-2); font-size: 11.5px; }
-  .mobile-actions { display: flex; flex-wrap: wrap; gap: 3px 12px; margin-top: 9px; padding-top: 8px; border-top: 1px solid var(--line); }
-  .mobile-actions :deep(.el-button) { margin: 0; padding: 0; font-size: 12px; }
-  .table-card .pager { justify-content: space-between; align-items: center; padding: 6px 12px 10px; border-top: 1px solid var(--line); }
-  .mobile-total { display: inline; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
-  .table-card .pager :deep(.el-pagination__sizes),
-  .table-card .pager :deep(.el-pagination__total) { display: none; }
-  .batch-bar { display: none; }
+  .manage-body { flex: none; overflow: visible; }
+  .tree-panel { bottom: auto; max-height: 440px; min-height: 260px; }
+  .list-col { flex: 1; }
+  .filter-card { padding: 12px; }
+  .filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .filters :deep(.el-select), .filters :deep(.el-input) { width: 100% !important; min-width: 0; }
+  .table-card { flex: none; }
+  .list-toolbar { flex-wrap: wrap; padding: 12px; gap: 10px; }
+  .updated-label { display: none; }
+  .list-tools { margin-left: auto; }
+  .view-toggle { display: none; }
+  .table-card .dataset-table { display: none; }
+  .mobile-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); padding: 12px; gap: 10px; }
+  .mobile-record { padding: 13px; }
+  .table-card .pager { justify-content: space-between; align-items: center; padding: 10px 12px; }
+  .mobile-total { display: inline; color: var(--ink-3); font-size: 11px; white-space: nowrap; }
+  .table-card .pager :deep(.el-pagination__sizes), .table-card .pager :deep(.el-pagination__total) { display: none; }
   .grid2 { grid-template-columns: 1fr; }
 }
-.row-link {
-  color: var(--ink);
-  font-weight: 500;
-  cursor: pointer;
+@media (max-width: 450px) {
+  .mobile-list { grid-template-columns: minmax(0, 1fr); }
+  .list-tools { gap: 5px; }.sort-select { width: 118px; }
+  .refresh-label { display: none; }
 }
-.row-link:hover {
-  color: var(--primary);
-}
-.fmt {
-  font-family: Consolas, Menlo, monospace;
-  font-size: 12px;
-  color: var(--primary);
-  background: var(--primary-050);
-  border: 1px solid var(--primary-100);
-  border-radius: 4px;
-  padding: 0 6px;
-  line-height: 18px;
-  display: inline-block;
-}
-.th-sort {
-  cursor: pointer;
-  user-select: none;
-  display: inline-flex;
-  align-items: center;
-}
-.arrows {
-  display: inline-flex;
-  flex-direction: column;
-  margin-left: 5px;
-  line-height: 0;
-}
-.arrows i {
-  display: block;
-  width: 0;
-  height: 0;
-  border-left: 3.5px solid transparent;
-  border-right: 3.5px solid transparent;
-}
-.arrows i:first-child {
-  border-bottom: 4px solid #c3cad6;
-  margin-bottom: 2px;
-}
-.arrows i:last-child {
-  border-top: 4px solid #c3cad6;
-}
-.arrows.asc i:first-child {
-  border-bottom-color: var(--primary);
-}
-.arrows.desc i:last-child {
-  border-top-color: var(--primary);
-}
-/* 状态（呼吸灯 + 进度条） */
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  font-size: 12.5px;
-}
-.status .d {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex: 0 0 7px;
-}
-.status.s-ok {
-  color: var(--ok);
-}
-.status.s-ok .d {
-  background: var(--ok);
-}
-.status.s-err {
-  color: var(--danger);
-}
-.status.s-err .d {
-  background: var(--danger);
-}
-.status.s-run {
-  color: var(--warn);
-}
-.status.s-run .d {
-  background: var(--warn);
-  animation: blink 1s infinite;
-}
-@keyframes blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.25;
-  }
-}
-.pbar {
-  margin-top: 5px;
-  height: 5px;
-  border-radius: 3px;
-  background: #eef1f6;
-  overflow: hidden;
-  width: 118px;
-}
-.pbar i {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: linear-gradient(90deg, #e08b1b, #f5b544);
-  transition: width 0.3s;
-}
-.op {
-  padding: 0 !important;
-  height: auto !important;
-}
-.op-sep {
-  color: var(--line-2);
-  margin: 0 5px;
-}
-.op.del {
-  color: var(--danger);
-}
-.op-dis {
-  color: #bcc3ce;
-  font-size: 12px;
-  cursor: not-allowed;
-}
-
-.svc-fmts {
-  font-size: 12px;
-  color: var(--ink-2);
-}
-.batch-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 12px;
-  font-size: 12.5px;
-  color: var(--ink-2);
-  border-top: 1px solid var(--line);
-}
-.batch-bar b {
-  color: var(--primary);
-}
-
 /* ---------- 抽屉表单 ---------- */
 .dlg-body {
   padding: 4px 2px;
@@ -1834,202 +1270,6 @@ onBeforeUnmount(() => {
   color: var(--ink-3);
   margin-top: 6px;
   line-height: 1.6;
-}
-.src-row {
-  margin-bottom: 12px;
-}
-.drop {
-  border: 1.5px dashed var(--line-2);
-  border-radius: 8px;
-  background: #fbfcfe;
-  padding: 22px 16px;
-  text-align: center;
-  cursor: pointer;
-  transition: 0.15s;
-}
-.drop:hover,
-.drop.over {
-  border-color: var(--primary);
-  background: #f5f9ff;
-}
-.drop .big {
-  font-size: 13.5px;
-  color: var(--ink-2);
-}
-.drop .big b {
-  color: var(--primary);
-  font-weight: 500;
-}
-.drop .small {
-  font-size: 12px;
-  color: var(--ink-3);
-  margin-top: 5px;
-}
-.file-chip {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border: 1px solid var(--line);
-  background: #f8fafd;
-  border-radius: 6px;
-  padding: 9px 11px;
-  margin-top: 10px;
-  font-size: 12.5px;
-  color: var(--ink-2);
-}
-.file-chip .nm {
-  color: var(--ink);
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.file-chip .x {
-  color: var(--ink-3);
-  cursor: pointer;
-}
-.file-chip .x:hover {
-  color: var(--danger);
-}
-.bar {
-  height: 6px;
-  border-radius: 4px;
-  background: #eaeef5;
-  overflow: hidden;
-  margin-top: 9px;
-}
-.bar i {
-  display: block;
-  height: 100%;
-  background: linear-gradient(90deg, #2b7cff, #57b8ff);
-  transition: width 0.3s;
-}
-.prog-txt {
-  display: flex;
-  font-size: 12px;
-  color: var(--ink-3);
-  margin-top: 6px;
-}
-.prog-txt span:last-child {
-  margin-left: auto;
-}
-.automap {
-  margin-top: 10px;
-}
-.detect {
-  margin-top: 10px;
-  padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  line-height: 1.7;
-  background: #f6f7fa;
-  color: var(--ink-2);
-  border: 1px dashed var(--line-2);
-}
-.detect.ok {
-  background: #eefaf3;
-  border-color: #c2e9d5;
-  color: #1d8a55;
-}
-.detect.warn {
-  background: #fff8ea;
-  border-color: #f3e0b0;
-  color: #a9710d;
-}
-.fmt-trigger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  border: 1px solid var(--line-2);
-  background: #fff;
-  color: var(--ink-3);
-  font-size: 10px;
-  font-weight: 700;
-  margin-left: 6px;
-  cursor: pointer;
-  user-select: none;
-  vertical-align: 1px;
-}
-.fmt-trigger:hover {
-  color: var(--primary);
-  border-color: var(--primary);
-}
-.fmt-pop {
-  position: absolute;
-  top: 26px;
-  left: 0;
-  z-index: 40;
-  width: 430px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 11px 12px 12px;
-  box-shadow: var(--sh-2);
-}
-.fmt-pop-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--ink);
-  margin-bottom: 8px;
-}
-.fmt-pop-head::before {
-  content: '';
-  width: 3px;
-  height: 12px;
-  border-radius: 2px;
-  background: var(--primary);
-}
-.fmt-box {
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: #fbfcfe;
-  overflow: hidden;
-}
-.fmt-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 11px;
-  font-size: 12.5px;
-  border-bottom: 1px solid var(--line);
-}
-.fmt-row:last-child {
-  border-bottom: none;
-}
-.fmt-row .t {
-  width: 128px;
-  flex: none;
-  color: var(--ink-2);
-}
-.fmt-row .f {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.fmt-row .f b {
-  font-weight: 500;
-  font-size: 11.5px;
-  line-height: 17px;
-  padding: 0 7px;
-  border-radius: 4px;
-  color: var(--primary);
-  background: var(--primary-050);
-  border: 1px solid var(--primary-100);
-}
-.fmt-note {
-  font-size: 11.5px;
-  color: var(--ink-3);
-  margin-top: 6px;
-  line-height: 1.6;
-}
-.hidden {
-  display: none !important;
 }
 /* 详情信息行 */
 .info-rows .info-row {

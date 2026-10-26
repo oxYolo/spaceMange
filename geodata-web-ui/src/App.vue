@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue'
 import { useRoute } from 'vue-router'
-import ConsoleLayout from '@/layouts/ConsoleLayout.vue'
+const ConsoleLayout = defineAsyncComponent(() => import('@/layouts/ConsoleLayout.vue'))
 const route = useRoute()
 </script>
 

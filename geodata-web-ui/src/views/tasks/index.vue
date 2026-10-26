@@ -1,257 +1,102 @@
 <script setup lang="ts">
-/**
- * 任务中心（tasks）
- * 接口依据：LayerToolController — GET /layerTool/getList?pageSize&pageIndex&origin
- *  - GET  /layerTool/getList?pageSize&pageIndex&origin   任务分页（origin 为空取全部）
- *  - GET  /layerTool/storageLayer?id&targetId            成果入库
- *  - GET  /layerTool/delete?id                           删除任务记录
- */
-import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import PageHead from '@/components/common/PageHead.vue'
 import Icon from '@/components/common/Icon.vue'
-import { layerToolApi, dataTypeApi } from '@/api'
-import { fmtTime, pickList, pickTotal, ORIGIN_NAME } from '@/utils/format'
-import { onImMessage, imEnabled, type ImMessage } from '@/utils/im'
-import { useUserStore } from '@/stores/user'
+import { fmtTime, ORIGIN_NAME } from '@/utils/format'
+import { imEnabled } from '@/utils/im'
+import { useTaskCenter } from '@/features/tasks/useTaskCenter'
+import {
+  canStoreTask, taskId, taskName, taskNextStep, taskProgress,
+  taskStatus, taskStorageHint, taskStored, type TaskRecord,
+} from '@/features/tasks/model'
 
-const userStore = useUserStore()
-const USER_NAME = userStore.userName || 'admin'
-
-/* ------------------------------ 通用 ------------------------------ */
-function rowId(r: any): string {
-  return String(r?.id ?? r?.taskId ?? '')
-}
-function rowLayer(r: any): string {
-  return String(r?.layerName ?? r?.taskName ?? r?.name ?? '-')
-}
-function rowOrigin(r: any): string {
-  return ORIGIN_NAME[String(r?.origin)] || (r?.origin != null ? `origin=${r.origin}` : '-')
-}
-function rowCreator(r: any): string {
-  return String(r?.createBy ?? r?.user ?? r?.username ?? '-')
-}
-function rowTime(r: any): string {
-  return fmtTime(r?.createDT ?? r?.createTime ?? r?.createDate)
-}
-
-/** 任务状态归一：兼容中英文 / 数字 */
-function statusInfo(s: any): { label: string; type: string; key: 'wait' | 'run' | 'done' | 'fail' } {
-  const v = String(s ?? '').trim()
-  const up = v.toUpperCase()
-  const doneSet = ['1', 'SUCCESS', 'FINISH', 'FINISHED', 'DONE', 'COMPLETE', 'COMPLETED']
-  const failSet = ['-1', 'FAIL', 'FAILED', 'ERROR', 'EXCEPTION']
-  const runSet = ['RUNNING', 'PROCESSING', 'DOING', 'EXECUTING']
-  const waitSet = ['WAIT', 'WAITING', 'PENDING', 'QUEUE', 'QUEUED']
-  if (doneSet.includes(up) || v === '成功' || v === '完成' || v === '已完成') return { label: '成功', type: 'green', key: 'done' }
-  if (failSet.includes(up) || v === '失败' || v === '异常') return { label: '失败', type: 'red', key: 'fail' }
-  if (runSet.includes(up) || v === '进行中' || v === '处理中' || v === '运行中') return { label: '进行中', type: 'blue', key: 'run' }
-  if (waitSet.includes(up) || v === '等待' || v === '排队' || v === '待处理' || v === '未开始')
-    return { label: '等待', type: 'orange', key: 'wait' }
-  return { label: v || '未知', type: 'gray', key: 'wait' }
-}
-function taskPercent(r: any): number {
-  const st = statusInfo(r?.status)
-  if (st.key === 'done') return 100
-  const n = Number(r?.progress ?? r?.percent ?? 0)
-  if (Number.isNaN(n)) return 0
-  return Math.max(0, Math.min(100, Math.round(n)))
-}
-
-/* ------------------------------ 数据加载 ------------------------------ */
-const list = ref<any[]>([])
-const loading = ref(false)
-const page = reactive({ pageSize: 10, pageIndex: 1, total: 0 })
-const originFilter = ref<string>('') // '' = 全部
-
-const originChips = computed(() =>
-  Object.keys(ORIGIN_NAME).map((k) => ({ value: k, label: `${k} · ${ORIGIN_NAME[k]}` })),
-)
-
-async function loadTasks() {
-  loading.value = true
-  try {
-    const res = await layerToolApi.getList(page.pageSize, page.pageIndex, originFilter.value || undefined)
-    list.value = pickList<any>(res)
-    page.total = pickTotal(res, list.value.length)
-  } catch (e: any) {
-    ElMessage.error(e?.message || '加载任务列表失败')
-  } finally {
-    loading.value = false
-  }
-}
-function pickOrigin(v: string) {
-  originFilter.value = v
-  page.pageIndex = 1
-  loadTasks()
-}
-function onPageChange(i: number) {
-  page.pageIndex = i
-  loadTasks()
-}
-
-/* ------------------------------ 自动刷新 ------------------------------ */
-const autoRefresh = ref(false)
-let refreshTimer: ReturnType<typeof setInterval> | null = null
-
-function clearTimer() {
-  if (refreshTimer) {
-    clearInterval(refreshTimer)
-    refreshTimer = null
-  }
-}
-function toggleAuto(v: boolean | string | number) {
-  autoRefresh.value = Boolean(v)
-  clearTimer()
-  // IM 实时推送可用时自动刷新降频为 15s 兜底；不可用维持 5s
-  if (v) refreshTimer = setInterval(loadTasks, imEnabled() ? 15000 : 5000)
-}
-
-/* ------------------------------ 成果入库 ------------------------------ */
-const storageVisible = ref(false)
-const storageRow = ref<any>(null)
-const storageTargetId = ref('')
-const storageTargets = ref<any[]>([])
-
-function flattenTypes(nodes: any[], out: any[] = []): any[] {
-  for (const n of nodes || []) {
-    out.push(n)
-    if (n.children?.length) flattenTypes(n.children, out)
-  }
-  return out
-}
-async function loadStorageTargets() {
-  try {
-    storageTargets.value = flattenTypes(pickList<any>(await dataTypeApi.getAllList()))
-  } catch {
-    storageTargets.value = []
-  }
-}
-async function openStorage(row: any) {
-  storageRow.value = row
-  storageTargetId.value = ''
-  storageVisible.value = true
-  if (!storageTargets.value.length) await loadStorageTargets()
-}
-async function confirmStorage() {
-  if (!storageTargetId.value) {
-    ElMessage.warning('请选择目标目录')
-    return
-  }
-  try {
-    await layerToolApi.storageLayer(rowId(storageRow.value), storageTargetId.value)
-    ElMessage.success('成果已入库')
-    storageVisible.value = false
-    await loadTasks()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '成果入库失败')
-  }
-}
-
-/* ------------------------------ 查看 / 删除 ------------------------------ */
+const router = useRouter()
+const {
+  list, loading, page, originFilter, autoRefresh, listError, updatedAt, deletingIds,
+  refresh, pickOrigin, onPageChange, removeRow, pageSummary,
+  storageVisible, storageRow, storageTargetId, storageTargets, storageTargetsLoading, storageTargetsError,
+  storageSubmitting, loadStorageTargets, openStorage, confirmStorage,
+} = useTaskCenter()
+const originChips = Object.entries(ORIGIN_NAME).map(([value, label]) => ({ value, label }))
+const refreshLabel = computed(() => `自动刷新 · ${imEnabled() ? '15' : '5'} 秒`)
 const viewVisible = ref(false)
-const viewRow = ref<any>(null)
-function openView(row: any) {
+const viewRow = ref<TaskRecord | null>(null)
+// Keep the open detail panel in sync with refreshed rows.
+const detailTask = computed(() => list.value.find((row) => taskId(row) === taskId(viewRow.value)) ?? viewRow.value)
+
+function rowOrigin(row: TaskRecord) {
+  return ORIGIN_NAME[String(row.origin)] || '其他处理任务'
+}
+function rowCreator(row: TaskRecord) {
+  return row.createBy ?? row.user ?? row.username ?? '—'
+}
+function rowTime(row: TaskRecord) {
+  return fmtTime(row.createDT ?? row.createTime ?? row.createDate)
+}
+function openView(row: TaskRecord) {
   viewRow.value = row
   viewVisible.value = true
 }
-async function removeRow(row: any) {
-  try {
-    await ElMessageBox.confirm(`确认删除该任务记录？（ID: ${rowId(row)}）`, '删除任务', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    })
-  } catch {
-    return
-  }
-  try {
-    await layerToolApi.delete(rowId(row))
-    ElMessage.success('已删除')
-    await loadTasks()
-  } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
-  }
-}
-
-let imUnsub: (() => void) | null = null
-let imRefreshTimer: ReturnType<typeof setTimeout> | null = null
-
-onMounted(async () => {
-  await Promise.all([loadTasks(), loadStorageTargets()])
-  // IM 实时事件（三维转换/拓扑检查/二维入库）：节流静默刷新，与自动刷新互补
-  imUnsub = onImMessage(USER_NAME, (msg: ImMessage) => {
-    if (!['Model3dConvert', 'TopologyCheck', 'layerInsertLog'].includes(msg.moduleType)) return
-    if (imRefreshTimer) return
-    imRefreshTimer = setTimeout(() => {
-      imRefreshTimer = null
-      loadTasks()
-    }, 1200)
-  })
-})
-
-onBeforeUnmount(() => {
-  clearTimer()
-  if (imRefreshTimer) clearTimeout(imRefreshTimer)
-  imUnsub?.()
-})
 </script>
 
 <template>
   <div>
-    <PageHead title="任务中心" sub="接口依据：LayerTool getList">
+    <PageHead title="任务中心" sub="跟踪数据处理进度，将已完成的成果入库并继续使用。">
       <template #tools>
-        <button class="btn sm" @click="loadTasks"><Icon name="refresh" :size="13" />刷新</button>
-        <span class="muted" style="font-size: 12px">自动刷新(5s)</span>
-        <el-switch v-model="autoRefresh" size="small" @change="toggleAuto" />
+        <button class="btn sm" :disabled="loading" @click="refresh"><Icon name="refresh" :size="13" />刷新</button>
+        <span class="muted refresh-label">{{ refreshLabel }}</span>
+        <el-switch v-model="autoRefresh" size="small" aria-label="自动刷新任务状态" />
       </template>
     </PageHead>
 
-    <!-- origin 过滤 -->
     <div class="filters">
-      <div class="chips">
-        <span class="chip" :class="{ on: originFilter === '' }" @click="pickOrigin('')">全部</span>
-        <span
-          v-for="c in originChips"
-          :key="c.value"
-          class="chip"
-          :class="{ on: originFilter === c.value }"
-          @click="pickOrigin(c.value)"
-        >
-          {{ c.label }}
-        </span>
+      <div class="chips" aria-label="按处理类型筛选">
+        <button class="chip" :class="{ on: originFilter === '' }" :aria-pressed="originFilter === ''" @click="pickOrigin('')">全部</button>
+        <button v-for="chip in originChips" :key="chip.value" class="chip" :class="{ on: originFilter === chip.value }"
+          :aria-pressed="originFilter === chip.value" @click="pickOrigin(chip.value)">{{ chip.label }}</button>
       </div>
     </div>
 
+    <el-alert v-if="listError" type="error" :closable="false" show-icon class="task-alert">
+      <template #title>任务列表加载失败</template>
+      <p>{{ listError }}<button class="btn xs" :disabled="loading" @click="refresh">重新加载</button></p>
+    </el-alert>
+
     <div class="card">
-      <div class="card-h">
-        <Icon name="list" :size="14" />任务列表
-        <span class="cnt">{{ page.total }}</span>
+      <div class="card-h task-card-head">
+        <span class="row"><Icon name="list" :size="14" />任务列表<span class="cnt">{{ page.total }}</span></span>
+        <span class="muted task-list-meta">
+          <span v-if="pageSummary.done">当前页 {{ pageSummary.done }} 项成果待入库 · </span>
+          {{ updatedAt ? `更新于 ${fmtTime(updatedAt, 'HH:mm:ss')}` : '等待加载' }}
+        </span>
       </div>
       <div class="card-b">
-        <el-table :data="list" v-loading="loading" size="small" border>
-          <el-table-column label="任务名 / 工具" min-width="180" show-overflow-tooltip>
-            <template #default="{ row }">{{ rowLayer(row) }}</template>
+        <el-table :data="list" v-loading="loading" size="small" border :row-key="taskId">
+          <el-table-column label="任务名称" min-width="220" show-overflow-tooltip>
+            <template #default="{ row }">{{ taskName(row) }}</template>
           </el-table-column>
-          <el-table-column label="所属图层" min-width="180" show-overflow-tooltip>
-            <template #default="{ row }">{{ rowLayer(row) }}</template>
-          </el-table-column>
-          <el-table-column label="工具类型" width="160" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="tag violet">{{ rowOrigin(row) }}</span>
-            </template>
+          <el-table-column label="处理类型" width="160" show-overflow-tooltip>
+            <template #default="{ row }"><span class="tag violet">{{ rowOrigin(row) }}</span></template>
           </el-table-column>
           <el-table-column label="状态" width="100">
-            <template #default="{ row }">
-              <span class="tag" :class="statusInfo(row.status).type">{{ statusInfo(row.status).label }}</span>
-            </template>
+            <template #default="{ row }"><span class="tag" :class="taskStatus(row.status).type">{{ taskStatus(row.status).label }}</span></template>
           </el-table-column>
           <el-table-column label="进度" width="160">
             <template #default="{ row }">
-              <el-progress :percentage="taskPercent(row)" :status="statusInfo(row.status).key === 'fail' ? 'exception' : undefined" />
+              <el-progress v-if="taskProgress(row) !== null" :percentage="taskProgress(row) ?? 0"
+                :status="taskStatus(row.status).key === 'fail' ? 'exception' : undefined" />
+              <span v-else class="muted">暂未提供进度</span>
             </template>
           </el-table-column>
-          <el-table-column label="创建人" width="110">
+          <el-table-column label="成果" width="100">
+            <template #default="{ row }">
+              <span v-if="taskStored(row)" class="tag green">已入库</span>
+              <span v-else-if="canStoreTask(row)" class="tag orange">待入库</span>
+              <span v-else class="muted">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="创建人" width="110" show-overflow-tooltip>
             <template #default="{ row }">{{ rowCreator(row) }}</template>
           </el-table-column>
           <el-table-column label="创建时间" width="170">
@@ -259,65 +104,98 @@ onBeforeUnmount(() => {
           </el-table-column>
           <el-table-column label="操作" width="230" fixed="right">
             <template #default="{ row }">
-              <button class="btn xs" @click="openStorage(row)"><Icon name="db" :size="12" />成果入库</button>
+              <el-tooltip :content="taskStorageHint(row)" :disabled="canStoreTask(row)" placement="top">
+                <span><button class="btn xs" :disabled="!canStoreTask(row) || storageSubmitting" @click="openStorage(row)"><Icon name="db" :size="12" />成果入库</button></span>
+              </el-tooltip>
               <button class="btn xs" @click="openView(row)"><Icon name="eye" :size="12" />查看</button>
-              <button class="btn xs danger" @click="removeRow(row)"><Icon name="trash" :size="12" />删除</button>
+              <button class="btn xs danger" :disabled="deletingIds.has(taskId(row)) || !taskId(row)" @click="removeRow(row)"><Icon name="trash" :size="12" />删除</button>
             </template>
           </el-table-column>
-          <template #empty>暂无任务</template>
+          <template #empty>
+            <div class="task-empty">
+              <strong>{{ listError ? '暂时无法加载任务' : originFilter ? '该类型暂无任务' : '还没有处理任务' }}</strong>
+              <p>{{ listError ? '请重新加载任务列表，稍后再试。' : originFilter ? '可以切换其他处理类型，或前往工具箱创建任务。' : '从工具箱发起裁剪、缓冲区等数据处理，完成后在这里将成果入库。' }}</p>
+              <div class="row task-empty-actions">
+                <button v-if="originFilter" class="btn sm" @click="pickOrigin('')">查看全部任务</button>
+                <button v-if="!listError" class="btn sm primary" @click="router.push('/tools')">前往工具箱</button>
+              </div>
+            </div>
+          </template>
         </el-table>
-
-        <div class="row mt8" style="justify-content: flex-end">
-          <el-pagination
-            layout="total, prev, pager, next"
-            :total="page.total"
-            :page-size="page.pageSize"
-            :current-page="page.pageIndex"
-            @current-change="onPageChange"
-          />
+        <div v-if="page.total" class="row mt8" style="justify-content: flex-end">
+          <el-pagination layout="total, prev, pager, next" :total="page.total" :page-size="page.pageSize"
+            :current-page="page.pageIndex" @current-change="onPageChange" />
         </div>
       </div>
     </div>
 
-    <!-- 成果入库 -->
-    <el-dialog v-model="storageVisible" title="成果入库" width="460px">
-      <el-form label-width="90px" size="small">
-        <el-form-item label="任务">
-          <span class="mono">{{ rowId(storageRow) }}　{{ storageRow ? rowLayer(storageRow) : '' }}</span>
-        </el-form-item>
+    <el-dialog v-model="storageVisible" title="成果入库" width="min(460px, calc(100vw - 32px))"
+      :close-on-click-modal="!storageSubmitting" :close-on-press-escape="!storageSubmitting" :show-close="!storageSubmitting">
+      <p class="dialog-hint">选择成果所在目录，入库后可在数据管理中查看和发布。</p>
+      <el-form label-width="80px" size="small">
+        <el-form-item label="处理成果"><span>{{ taskName(storageRow) }}</span></el-form-item>
         <el-form-item label="目标目录">
-          <el-select v-model="storageTargetId" placeholder="请选择目标目录" filterable style="width: 100%">
-            <el-option v-for="t in storageTargets" :key="rowId(t)" :label="rowLayer(t)" :value="rowId(t)" />
+          <el-select v-model="storageTargetId" :loading="storageTargetsLoading" :disabled="storageSubmitting"
+            placeholder="请选择目标目录" filterable style="width: 100%">
+            <el-option v-for="target in storageTargets" :key="target.id" :label="target.label" :value="target.id" />
           </el-select>
         </el-form-item>
       </el-form>
+      <div v-if="storageTargetsError" class="target-error" role="alert">
+        <span>{{ storageTargetsError }}</span><button class="btn xs" :disabled="storageTargetsLoading" @click="loadStorageTargets">重试</button>
+      </div>
+      <p v-else-if="!storageTargetsLoading && !storageTargets.length" class="dialog-hint">暂无可用目录，请先在图层配置中创建目录。</p>
       <template #footer>
-        <button class="btn sm" @click="storageVisible = false">取消</button>
-        <button class="btn sm primary" @click="confirmStorage">确认入库</button>
+        <button class="btn sm" :disabled="storageSubmitting" @click="storageVisible = false">取消</button>
+        <button class="btn sm primary" :disabled="storageSubmitting || storageTargetsLoading || !storageTargetId" @click="confirmStorage">
+          {{ storageSubmitting ? '正在入库…' : '确认入库' }}
+        </button>
       </template>
     </el-dialog>
 
-    <!-- 任务详情 -->
-    <el-dialog v-model="viewVisible" title="任务详情" width="520px" @closed="viewRow = null">
-      <div v-if="viewRow" class="kv">
-        <span class="k">任务 ID</span><span class="v mono">{{ rowId(viewRow) }}</span>
-        <span class="k">任务名</span><span class="v">{{ rowLayer(viewRow) }}</span>
-        <span class="k">工具类型</span><span class="v">{{ rowOrigin(viewRow) }}</span>
-        <span class="k">状态</span>
-        <span class="v"><span class="tag" :class="statusInfo(viewRow.status).type">{{ statusInfo(viewRow.status).label }}</span></span>
-        <span class="k">进度</span><span class="v">{{ taskPercent(viewRow) }}%</span>
-        <span class="k">创建人</span><span class="v">{{ rowCreator(viewRow) }}</span>
-        <span class="k">创建时间</span><span class="v">{{ rowTime(viewRow) }}</span>
-      </div>
+    <el-dialog v-model="viewVisible" title="任务详情" width="min(540px, calc(100vw - 32px))" @closed="viewRow = null">
+      <template v-if="detailTask">
+        <div class="kv">
+          <span class="k">任务 ID</span><span class="v mono">{{ taskId(detailTask) }}</span>
+          <span class="k">任务名称</span><span class="v">{{ taskName(detailTask) }}</span>
+          <span class="k">处理类型</span><span class="v">{{ rowOrigin(detailTask) }}</span>
+          <span class="k">状态</span><span class="v"><span class="tag" :class="taskStatus(detailTask.status).type">{{ taskStatus(detailTask.status).label }}</span></span>
+          <template v-if="taskStatus(detailTask.status).key === 'unknown'">
+            <span class="k">原始状态</span><span class="v">{{ detailTask.status || '暂未返回' }}</span>
+          </template>
+          <span class="k">进度</span><span class="v">{{ taskProgress(detailTask) === null ? '暂未提供进度' : `${taskProgress(detailTask)}%` }}</span>
+          <span class="k">创建人</span><span class="v">{{ rowCreator(detailTask) }}</span>
+          <span class="k">创建时间</span><span class="v">{{ rowTime(detailTask) }}</span>
+          <template v-if="detailTask.errorMessage || detailTask.message">
+            <span class="k">处理信息</span><span class="v">{{ detailTask.errorMessage || detailTask.message }}</span>
+          </template>
+        </div>
+        <p class="task-next-step">{{ taskNextStep(detailTask) }}</p>
+      </template>
       <template #footer>
         <button class="btn sm" @click="viewVisible = false">关闭</button>
+        <button v-if="detailTask && taskStored(detailTask)" class="btn sm primary" @click="router.push('/manage')">前往数据管理</button>
+        <button v-else-if="detailTask && canStoreTask(detailTask)" class="btn sm primary" @click="viewVisible = false; openStorage(detailTask)">成果入库</button>
+        <button v-else-if="detailTask && taskStatus(detailTask.status).key === 'fail'" class="btn sm primary" @click="router.push('/tools')">重新创建任务</button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.filters {
-  padding-bottom: 10px;
-}
+.filters { padding-bottom: 10px; }
+.filters .chip { font: inherit; }
+.task-alert { margin-bottom: 12px; }
+.task-alert p { margin: 4px 0 0; }
+.task-alert .btn { margin-left: 12px; }
+.task-card-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.task-list-meta, .refresh-label { font-size: 12px; font-weight: 400; }
+.task-empty { padding: 30px 16px; line-height: 1.7; }
+.task-empty strong { color: var(--ink); font-size: 14px; }
+.task-empty p { margin: 6px 0 14px; }
+.task-empty-actions { justify-content: center; }
+.dialog-hint { margin: 0 0 16px; color: var(--ink-3); font-size: 12px; line-height: 1.7; }
+.target-error { display: flex; align-items: center; gap: 8px; color: var(--el-color-danger); font-size: 12px; }
+.task-next-step { margin: 20px 0 0; padding: 12px; background: var(--el-fill-color-light); border-radius: 6px; line-height: 1.7; }
+@media (max-width: 640px) { .task-list-meta { width: 100%; } }
 </style>

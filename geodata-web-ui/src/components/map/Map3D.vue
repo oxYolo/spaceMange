@@ -1,259 +1,186 @@
 <script setup lang="ts">
-/**
- * 三维地图基座（Cesium）
- * - Cesium 静态库按需注入（public/lib/Cesium），不影响其它页面首屏
- * - 天地图影像底图 + 注记
- * - 3D Tiles 加载（直接使用 /model3d/{id}/publish-url 返回的公开地址）
- */
+/** Cesium 地图：场景和数据各自拥有加载代次，关闭或切换后释放过期成果。 */
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { loadCesium } from '@/utils/cesium'
 import urlConfig from '@/config'
 
-const props = withDefaults(
-  defineProps<{
-    /** 3D Tiles 地址（tileset.json） */
-    url?: string
-    center?: [number, number, number]
-    /** 是否显示天地图影像底图 */
-    imagery?: boolean
-  }>(),
-  {
-    url: '',
-    center: () => urlConfig.cesiumCenter as [number, number, number],
-    imagery: true,
-  },
-)
-
+const props = withDefaults(defineProps<{
+  url?: string
+  center?: [number, number, number]
+  imagery?: boolean
+}>(), {
+  url: '', center: () => urlConfig.cesiumCenter as [number, number, number], imagery: true,
+})
 const emit = defineEmits<{
   (e: 'ready', viewer: any): void
   (e: 'loaded', tileset: any): void
   (e: 'error', err: any): void
 }>()
-
 const wrapRef = ref<HTMLDivElement>()
 const viewerRef = shallowRef<any>(null)
 const loading = ref(false)
 const errMsg = ref('')
+let disposed = false
+let initGeneration = 0
+let loadGeneration = 0
+let activePrimitive: any = null
 
-function tdtProvider(Cesium: any, kind: 'img' | 'cia' | 'vec' | 'cva') {
+function alive(viewer: any): boolean {
+  return !disposed && viewer === viewerRef.value && !viewer?.isDestroyed?.()
+}
+function destroyPrimitive(primitive: any, viewer?: any) {
+  if (!primitive) return
+  try {
+    const removed = viewer && !viewer.isDestroyed?.() && viewer.scene.primitives.remove(primitive)
+    if (!removed && !primitive.isDestroyed?.()) primitive.destroy?.()
+  } catch { /* 已销毁的场景无需再次释放 */ }
+}
+function clearTiles() {
+  loadGeneration++
+  destroyPrimitive(activePrimitive, viewerRef.value)
+  activePrimitive = null
+  if (!disposed) loading.value = false
+}
+function destroyViewer() {
+  clearTiles()
+  try { if (viewerRef.value && !viewerRef.value.isDestroyed?.()) viewerRef.value.destroy() } catch { /* 已释放 */ }
+  viewerRef.value = null
+}
+function tdtProvider(Cesium: any) {
   return new Cesium.WebMapTileServiceImageryProvider({
-    url: `${urlConfig.tdtUrl}/DataServer?T=${kind}_w&tk=${urlConfig.getTdtToken()}&x={TileMatrix}&y={TileRow}&l={TileCol}`,
-    layer: `${kind}_w`,
-    style: 'default',
-    format: 'tiles',
-    tileMatrixSetID: 'c',
-    subdomains: ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7'],
-    maximumLevel: 18,
+    url: `${urlConfig.tdtUrlHttps || urlConfig.tdtUrl}/DataServer?T=img_w&tk=${urlConfig.getTdtToken()}&x={TileCol}&y={TileRow}&l={TileMatrix}`,
+    layer: 'img_w', style: 'default', format: 'tiles', tileMatrixSetID: 'w', maximumLevel: 18,
   })
 }
-
-/** WebGL 可用性预检：无 GPU / 无头环境直接给出友好提示，避免 Cesium 抛出原生错误面板 */
 function hasWebGL(): boolean {
   try {
     const canvas = document.createElement('canvas')
-    return !!(
-      (window as any).WebGLRenderingContext &&
-      (canvas.getContext('webgl') || canvas.getContext('experimental-webgl'))
-    )
-  } catch {
-    return false
-  }
+    const context: any = canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl')
+    context?.getExtension?.('WEBGL_lose_context')?.loseContext()
+    return Boolean(context)
+  } catch { return false }
 }
 
 async function init() {
+  if (disposed) return
+  const generation = ++initGeneration
+  destroyViewer()
   loading.value = true
   errMsg.value = ''
   if (!hasWebGL()) {
     loading.value = false
-    errMsg.value = '当前浏览器环境不支持 WebGL，无法渲染三维场景。请在开启硬件加速的浏览器中打开本页面。'
+    errMsg.value = '当前浏览器无法显示三维场景，请开启硬件加速后重试。'
     emit('error', new Error('WebGL unavailable'))
     return
   }
   try {
     const Cesium = await loadCesium()
-    const options: any = {
-      animation: false,
-      timeline: false,
-      baseLayerPicker: false,
-      geocoder: false,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      fullscreenButton: false,
-      infoBox: false,
-      selectionIndicator: false,
-      shouldAnimate: false,
-    }
-    if (props.imagery) {
-      try {
-        options.imageryProvider = tdtProvider(Cesium, 'img')
-      } catch (e) {
-        /* 底图不可用时降级为无底图 */
-      }
-    }
-
-    let viewer: any
-    try {
-      viewer = new Cesium.Viewer(wrapRef.value, options)
-    } catch (e) {
-      // 兼容新版 Cesium：baseLayer 取代 imageryProvider
-      delete options.imageryProvider
-      viewer = new Cesium.Viewer(wrapRef.value, options)
-      if (props.imagery) {
-        try {
-          viewer.imageryLayers.addImageryProvider(tdtProvider(Cesium, 'img'))
-        } catch (e2) {
-          /* ignore */
-        }
-      }
-    }
-
-    // 隐藏版权信息条（可保留，按需开启）
-    const credit = viewer.cesiumWidget?.creditContainer
-    if (credit) credit.style.display = 'none'
-
-    // 接管 Cesium 原生错误面板，统一由组件内提示
-    if (viewer.cesiumWidget && typeof viewer.cesiumWidget.showErrorPanel === 'function') {
-      viewer.cesiumWidget.showErrorPanel = (title: string, message?: any) => {
-        errMsg.value = `${title || '三维渲染异常'}${message ? '：' + String(message) : ''}`
-      }
-    }
-
-    viewer.camera.setView({
-      destination: Cesium.Cartesian3.fromDegrees(props.center[0], props.center[1], props.center[2]),
+    if (disposed || generation !== initGeneration || !wrapRef.value) return
+    const viewer = new Cesium.Viewer(wrapRef.value, {
+      animation: false, timeline: false, baseLayerPicker: false, geocoder: false,
+      homeButton: false, sceneModePicker: false, navigationHelpButton: false,
+      fullscreenButton: false, infoBox: false, selectionIndicator: false,
+      shouldAnimate: false, imageryProvider: false, baseLayer: false,
     })
-
     viewerRef.value = viewer
+    if (props.imagery && urlConfig.getTdtToken()) {
+      try { viewer.imageryLayers.addImageryProvider(tdtProvider(Cesium)) } catch { /* 数据仍可在无底图场景显示 */ }
+    }
+    if (viewer.cesiumWidget && typeof viewer.cesiumWidget.showErrorPanel === 'function') {
+      viewer.cesiumWidget.showErrorPanel = () => {
+        if (!alive(viewer)) return
+        errMsg.value = '三维场景显示异常，请重试或更换浏览器。'
+      }
+    }
+    viewer.camera.setView({ destination: Cesium.Cartesian3.fromDegrees(...props.center) })
     emit('ready', viewer)
-
-    if (props.url) await loadTileset(props.url)
-  } catch (e: any) {
-    errMsg.value = e?.message || '三维场景初始化失败'
-    emit('error', e)
-  } finally {
     loading.value = false
+    if (props.url) await loadTileset(props.url)
+  } catch (error: any) {
+    if (disposed || generation !== initGeneration) return
+    destroyViewer()
+    errMsg.value = error?.message || '三维场景初始化失败'
+    emit('error', error)
   }
 }
 
-/** .glb/.gltf 单体模型走 Model 加载；其余按 3D Tiles（tileset.json）处理 */
 const isGltfUrl = (url: string) => /\.(glb|gltf)(\?|#|$)/i.test(url)
-
 async function loadTileset(url: string) {
   const viewer = viewerRef.value
   const Cesium = (window as any).Cesium
-  if (!viewer || !Cesium || !url) return
+  if (!viewer || !Cesium || !alive(viewer)) return
+  clearTiles()
+  if (!url) return
+  const generation = loadGeneration
+  const current = () => alive(viewer) && generation === loadGeneration
+  let candidate: any = null
   loading.value = true
+  errMsg.value = ''
   try {
     if (isGltfUrl(url)) {
-      // 单体模型成果（obj2gltf / FBX2glTF / IfcConvert）。
-      // Cesium 1.94 无 Model.fromGltfAsync，fromGltf 同步返回、异步就绪；
-      // boundingSphere 需等 readyPromise 后才可读（就绪前为 undefined，静默跳过会导致相机不定位）
-      const model: any = Cesium.Model.fromGltfAsync
-        ? await Cesium.Model.fromGltfAsync({ url })
-        : Cesium.Model.fromGltf({ url })
-      // glb 源数据无地理坐标（局部坐标系），默认放到地图中心点的东北天坐标系，否则落在 ECEF 原点不可见
+      candidate = Cesium.Model.fromGltfAsync
+        ? await Cesium.Model.fromGltfAsync({ url }) : Cesium.Model.fromGltf({ url })
+      if (!current()) { destroyPrimitive(candidate); return }
       const center = Cesium.Cartesian3.fromDegrees(props.center[0], props.center[1], 80)
-      model.modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(center)
-      viewer.scene.primitives.add(model)
-      // boundingSphere 为模型空间坐标，需乘 modelMatrix 得到世界坐标再定位
-      const flyToModel = () => {
-        try {
-          const bs = model.boundingSphere
-          if (!bs) return
-          const worldCenter = Cesium.Matrix4.multiplyByPoint(
-            model.modelMatrix, bs.center, new Cesium.Cartesian3(),
-          )
-          const worldBs = new Cesium.BoundingSphere(worldCenter, bs.radius)
-          viewer.camera.flyToBoundingSphere(worldBs, {
-            duration: 1.2,
-            offset: new Cesium.HeadingPitchRange(0, -0.5, Math.max(worldBs.radius * 3, 50)),
-          })
-        } catch (e) {
-          console.warn('[Map3D] glb 相机定位失败', e)
-        }
+      candidate.modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(center)
+      viewer.scene.primitives.add(candidate)
+      activePrimitive = candidate
+      if (candidate.readyPromise) await candidate.readyPromise
+      if (!current()) return
+      const sphere = candidate.boundingSphere
+      if (sphere) {
+        const worldCenter = Cesium.Matrix4.multiplyByPoint(candidate.modelMatrix, sphere.center, new Cesium.Cartesian3())
+        const bounds = new Cesium.BoundingSphere(worldCenter, sphere.radius)
+        viewer.camera.flyToBoundingSphere(bounds, {
+          duration: 1.2, offset: new Cesium.HeadingPitchRange(0, -0.5, Math.max(bounds.radius * 3, 50)),
+        })
       }
-      if (model.readyPromise) {
-        model.readyPromise.then(flyToModel).catch(() => flyToModel())
-      } else {
-        flyToModel()
-      }
-      emit('loaded', model)
     } else {
-      // 兼容定制版 Cesium：老版本无 Cesium3DTileset.fromUrl 静态方法，走构造函数 + readyPromise
-      const TilesetCtor: any = Cesium.Cesium3DTileset
-      let tileset: any
-      if (typeof TilesetCtor.fromUrl === 'function') {
-        tileset = await TilesetCtor.fromUrl(url)
-        viewer.scene.primitives.add(tileset)
-      } else {
-        tileset = new TilesetCtor({ url })
-        viewer.scene.primitives.add(tileset)
-        if (tileset.readyPromise) {
-          try {
-            await tileset.readyPromise
-          } catch {
-            /* 瓦片部分失败不阻断整体展示 */
-          }
-        }
-      }
-      await viewer.zoomTo(tileset)
-      emit('loaded', tileset)
+      const Constructor = Cesium.Cesium3DTileset
+      candidate = typeof Constructor.fromUrl === 'function' ? await Constructor.fromUrl(url) : new Constructor({ url })
+      if (!current()) { destroyPrimitive(candidate); return }
+      viewer.scene.primitives.add(candidate)
+      activePrimitive = candidate
+      if (candidate.readyPromise) await candidate.readyPromise
+      if (!current()) return
+      await viewer.zoomTo(candidate)
+      if (!current()) return
     }
-  } catch (e: any) {
-    errMsg.value = '三维数据加载失败：' + (e?.message || '地址不可达或格式不支持')
-    emit('error', e)
+    emit('loaded', candidate)
+  } catch (error: any) {
+    if (!current()) return
+    destroyPrimitive(candidate, viewer)
+    activePrimitive = null
+    errMsg.value = '三维数据暂时无法加载，请确认服务可访问后重试。'
+    emit('error', error)
   } finally {
-    loading.value = false
+    if (current()) loading.value = false
   }
 }
-
-/** 清空所有 3D Tiles */
-function clearTiles() {
-  const viewer = viewerRef.value
-  if (!viewer) return
-  viewer.scene.primitives.removeAll()
+function retry() {
+  if (loading.value) return
+  if (viewerRef.value) void loadTileset(props.url)
+  else void init()
 }
-
-/** 飞行定位 */
 function flyTo(lon: number, lat: number, height = 2000) {
   const viewer = viewerRef.value
   const Cesium = (window as any).Cesium
-  if (!viewer || !Cesium) return
+  if (!viewer || !Cesium || !alive(viewer)) return
   viewer.camera.flyTo({ destination: Cesium.Cartesian3.fromDegrees(lon, lat, height), duration: 1.2 })
 }
-
 onMounted(init)
-
-onBeforeUnmount(() => {
-  try {
-    viewerRef.value?.destroy()
-  } catch (e) {
-    /* ignore */
-  }
-  viewerRef.value = null
+onBeforeUnmount(() => { disposed = true; initGeneration++; destroyViewer() })
+watch(() => props.url, (url, old) => {
+  if (url !== old && viewerRef.value) void loadTileset(url)
 })
-
-watch(
-  () => props.url,
-  (v, old) => {
-    if (!viewerRef.value) return
-    if (v && v !== old) {
-      clearTiles()
-      loadTileset(v)
-    } else if (!v) {
-      clearTiles()
-    }
-  },
-)
-
-defineExpose({ getViewer: () => viewerRef.value, loadTileset, clearTiles, flyTo })
+defineExpose({ getViewer: () => viewerRef.value, loadTileset, clearTiles, flyTo, retry })
 </script>
 
 <template>
   <div class="cesium-wrap">
     <div ref="wrapRef" class="cesium-map"></div>
     <div v-if="loading" class="cesium-mask">三维场景加载中…</div>
-    <div v-if="errMsg" class="cesium-err">{{ errMsg }}</div>
+    <div v-if="errMsg" class="cesium-err" role="alert">{{ errMsg }}<button type="button" :disabled="loading" @click="retry">重试</button></div>
   </div>
 </template>
 
@@ -278,6 +205,7 @@ defineExpose({ getViewer: () => viewerRef.value, loadTileset, clearTiles, flyTo 
   border-radius: 6px;
   font-size: 12.5px;
 }
+.cesium-err button { display: block; margin: 9px auto 0; padding: 5px 14px; border: 1px solid #fff9; border-radius: 5px; background: transparent; color: #fff; cursor: pointer; }
 .cesium-mask {
   background: rgba(16, 32, 52, 0.78);
   color: #dce8f5;

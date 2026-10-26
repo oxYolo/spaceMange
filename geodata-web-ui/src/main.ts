@@ -23,4 +23,5 @@ app.use(ElementPlus, { locale: zhCn })
 app.use(pinia)
 app.use(router)
 
-app.mount('#app')
+// Wait for the initial route before mounting its page; routes have no auth guard.
+void router.isReady().then(() => app.mount('#app'))

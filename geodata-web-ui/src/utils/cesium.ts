@@ -6,6 +6,8 @@
  * 仅在三维页面首次使用时注入，避免 4.4MB+ 脚本拖慢控制台其它页面。
  */
 let loading: Promise<any> | null = null
+let managed = false
+const loadedScripts = new Set<string>()
 
 const CSS_FILES = ['/lib/Cesium/Widgets/widgets.css', '/lib/Cesium/Widgets/widgets_ext_min.css']
 const JS_FILES = [
@@ -24,19 +26,21 @@ function injectCss(href: string, id: string) {
 }
 
 function injectScript(src: string): Promise<void> {
+  if (loadedScripts.has(src)) return Promise.resolve()
   return new Promise((resolve, reject) => {
     const s = document.createElement('script')
     s.src = src
     s.async = false
-    s.onload = () => resolve()
-    s.onerror = () => reject(new Error(`Cesium 静态脚本加载失败：${src}`))
+    s.onload = () => { loadedScripts.add(src); resolve() }
+    s.onerror = () => { s.remove(); reject(new Error('三维组件加载失败，请检查网络后重试')) }
     document.head.appendChild(s)
   })
 }
 
 export function loadCesium(): Promise<any> {
-  if ((window as any).Cesium) return Promise.resolve((window as any).Cesium)
   if (loading) return loading
+  if ((window as any).Cesium && !managed) return Promise.resolve((window as any).Cesium)
+  managed = true
 
   loading = (async () => {
     ;(window as any).CESIUM_BASE_URL = '/lib/Cesium/'

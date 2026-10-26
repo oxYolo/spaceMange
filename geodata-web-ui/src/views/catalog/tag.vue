@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 数据标签（编目管理）
  * 后端：DataTagController（6 端点）：GetAllList / GetAllListByDataType / Insert / Update / Delete
@@ -12,7 +13,7 @@ import PageHead from '@/components/common/PageHead.vue'
 import Icon from '@/components/common/Icon.vue'
 import { dataTagApi, tagRelationApi, dictApi, layerContentApi } from '@/api'
 import { pickList, fmtTime } from '@/utils/format'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 const userStore = useUserStore()
 
@@ -72,7 +73,7 @@ async function loadTags() {
       : await dataTagApi.getAllList()
     tags.value = pickList(res)
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    showError(e, '加载失败')
   } finally {
     loading.value = false
   }
@@ -84,7 +85,7 @@ async function loadDict() {
     const res = await dictApi.codeAll()
     dictOptions.value = pickList(res)
   } catch (e: any) {
-    ElMessage.error(e?.message || '字典加载失败')
+    showError(e, '字典加载失败')
   }
 }
 
@@ -136,7 +137,7 @@ async function save() {
     dialog.visible = false
     await loadTags()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     loading.value = false
   }
@@ -159,7 +160,7 @@ async function removeTag(row: any) {
     ElMessage.success('删除成功')
     await loadTags()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   } finally {
     loading.value = false
   }
@@ -182,7 +183,7 @@ async function openBatch() {
     const res = await layerContentApi.getPageListByName({ createBy: userStore.userName }, 50, 1)
     resourceOptions.value = pickList(res)
   } catch (e: any) {
-    ElMessage.error(e?.message || '资源列表加载失败')
+    showError(e, '资源列表加载失败')
   }
 }
 
@@ -201,7 +202,7 @@ async function saveBatch() {
     ElMessage.success('批量打标成功')
     batch.visible = false
   } catch (e: any) {
-    ElMessage.error(e?.message || '批量打标失败')
+    showError(e, '批量打标失败')
   } finally {
     loading.value = false
   }
@@ -215,7 +216,7 @@ onMounted(() => {
 
 <template>
   <div>
-    <PageHead title="数据标签" sub="DataTagController · 6 端点 + TagRelation/MultiInsert 批量打标">
+    <PageHead title="数据标签" sub="维护业务标签，为数据资源批量分类和标记">
       <template #tools>
         <button class="btn primary" @click="openAdd"><Icon name="plus" :size="13" />新增标签</button>
         <button class="btn" @click="openBatch"><Icon name="tag" :size="13" />批量打标</button>

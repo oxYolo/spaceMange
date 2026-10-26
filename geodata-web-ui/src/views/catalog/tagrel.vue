@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 标签关系（编目管理）
  * 后端：TagRelationController（8 端点）
@@ -13,7 +14,7 @@ import PageHead from '@/components/common/PageHead.vue'
 import Icon from '@/components/common/Icon.vue'
 import { tagRelationApi, dataTagApi, layerContentApi } from '@/api'
 import { pickList, fmtTime } from '@/utils/format'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 const userStore = useUserStore()
 
@@ -54,7 +55,7 @@ async function loadRows() {
     const res = await tagRelationApi.getAllList()
     rows.value = pickList(res)
   } catch (e: any) {
-    ElMessage.error(e?.message || '加载失败')
+    showError(e, '加载失败')
   } finally {
     loading.value = false
   }
@@ -70,7 +71,7 @@ async function loadOptions() {
     tags.value = pickList(tagRes)
     resourceOptions.value = pickList(resRes)
   } catch (e: any) {
-    ElMessage.error(e?.message || '下拉数据加载失败')
+    showError(e, '下拉数据加载失败')
   }
 }
 
@@ -99,7 +100,7 @@ async function saveBatch() {
     batch.visible = false
     await loadRows()
   } catch (e: any) {
-    ElMessage.error(e?.message || '关联建立失败')
+    showError(e, '关联建立失败')
   } finally {
     loading.value = false
   }
@@ -121,7 +122,7 @@ async function queryByMap() {
       const text = Array.isArray(res) ? res.join('、') : String(res ?? '（无结果）')
       await ElMessageBox.alert(text || '（无结果）', '查询结果', { confirmButtonText: '知道了' })
     } catch (e: any) {
-      ElMessage.error(e?.message || '查询失败')
+      showError(e, '查询失败')
     } finally {
       loading.value = false
     }
@@ -147,7 +148,7 @@ async function removeRel(row: any) {
     ElMessage.success('已解除关系')
     await loadRows()
   } catch (e: any) {
-    ElMessage.error(e?.message || '解除失败')
+    showError(e, '解除失败')
   } finally {
     loading.value = false
   }
@@ -184,7 +185,7 @@ async function saveEdit() {
     editVisible.value = false
     await loadRows()
   } catch (e: any) {
-    ElMessage.error(e?.message || '更新失败')
+    showError(e, '更新失败')
   } finally {
     editSaving.value = false
   }
@@ -198,7 +199,7 @@ onMounted(() => {
 
 <template>
   <div>
-    <PageHead title="标签关系" sub="TagRelationController · 8 端点（多对多中间表）">
+    <PageHead title="标签关系" sub="建立标签与资源的关联，按业务主题组织和检索数据">
       <template #tools>
         <button class="btn primary" @click="openBatch"><Icon name="plus" :size="13" />批量建立关联</button>
         <button class="btn" @click="queryByMap"><Icon name="search" :size="13" />按地图反查</button>

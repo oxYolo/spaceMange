@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 符号库 —— SymbolController（6 端点）
  * 关联端点依据：
@@ -13,7 +14,7 @@ import PageHead from '@/components/common/PageHead.vue'
 import Icon from '@/components/common/Icon.vue'
 import { symbolApi } from '@/api'
 import { pickList, pickTotal } from '@/utils/format'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 const userStore = useUserStore()
 
@@ -81,7 +82,7 @@ async function load() {
     list.value = pickList<SymbolRow>(res)
     total.value = pickTotal(res, list.value.length)
   } catch (e: any) {
-    ElMessage.error(e?.message || '符号列表加载失败')
+    showError(e, '符号列表加载失败')
   } finally {
     loading.value = false
   }
@@ -180,7 +181,7 @@ async function save() {
     dialogVisible.value = false
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     saving.value = false
   }
@@ -201,7 +202,7 @@ async function onDelete(row: SymbolRow) {
     ElMessage.success('已删除')
     await load()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   }
 }
 
@@ -210,7 +211,7 @@ onMounted(load)
 
 <template>
   <div>
-    <PageHead title="符号库" sub="SymbolController · 6 端点（列表 / 增删改 / 详情）">
+    <PageHead title="符号库" sub="维护可复用的地图符号，统一图层的视觉表达">
       <template #tools>
         <el-input
           v-model="keyword"

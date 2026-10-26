@@ -1,18 +1,29 @@
-import axios, { type AxiosRequestConfig, type AxiosInstance } from 'axios'
-import { ElMessage } from 'element-plus'
+import axios, { type AxiosRequestConfig, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios'
 import urlConfig from '@/config'
-import { getToken, removeToken } from '@/auth/session'
+import { getSessionVersion, getToken, invalidateSession } from '@/auth/session'
+import { AppRequestError, isRequestCanceled } from './error'
+
+export { AppRequestError, getErrorMessage, isRequestCanceled, isUnauthorized } from './error'
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** 兼容旧调用；请求层不弹提示，提示由页面统一处理。 */
+    silent?: boolean
+    /** 请求发起时的会话版本，由拦截器设置。 */
+    sessionVersion?: number
+  }
+}
 
 /** 统一返回体外壳：{ code, success, result, msg } */
 export interface ResultEnvelope<T = any> {
-  code: number
+  code?: number | string
   success?: boolean
   result?: T
   msg?: string
 }
 
 /** 裸返回判定：后端有大量端点没有 Result 外壳，直接返回数据体 */
-export function isEnvelope(v: any): v is ResultEnvelope {
+export function isEnvelope(v: unknown): v is ResultEnvelope {
   return (
     !!v &&
     typeof v === 'object' &&
@@ -22,6 +33,44 @@ export function isEnvelope(v: any): v is ResultEnvelope {
   )
 }
 
+function bodyMessage(body: unknown): string {
+  if (!body || typeof body !== 'object') return ''
+  const record = body as Record<string, unknown>
+  return typeof record.msg === 'string' && record.msg.trim() ? record.msg
+    : typeof record.message === 'string' ? record.message : ''
+}
+
+/** 认证接口使用 {code, data/user}，业务接口使用 Result；两种错误都需识别。 */
+function businessError(body: unknown): AppRequestError | undefined {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return
+  const record = body as Record<string, unknown>
+  const hasStatus = isEnvelope(body) || typeof record.code === 'number'
+    || (typeof record.code === 'string' && /^\d+$/.test(record.code)
+      && ('msg' in record || 'message' in record || 'success' in record))
+  if (!hasStatus) return
+  if (record.success !== false && (record.code === undefined || Number(record.code) === 200)) return
+  return new AppRequestError(bodyMessage(body) || '操作失败', {
+    kind: 'business',
+    code: typeof record.code === 'number' || typeof record.code === 'string' ? record.code : undefined,
+  })
+}
+
+function sentToken(config?: InternalAxiosRequestConfig): string {
+  const authorization = config?.headers.get('Authorization')
+  return typeof authorization === 'string' && authorization.startsWith('Bearer ') ? authorization.slice(7) : ''
+}
+
+function expireIfUnauthorized(error: AppRequestError, config?: InternalAxiosRequestConfig): AppRequestError {
+  if (error.status !== 401 && Number(error.code) !== 401) return error
+  const token = sentToken(config)
+  if (!token) return error // 登录失败属于表单错误，不触发会话失效。
+  invalidateSession(token, config?.sessionVersion)
+  return new AppRequestError(error.message, {
+    kind: error.kind, code: error.code, status: error.status, originalError: error.originalError,
+    silent: true, // 由单次会话失效通知统一提示，旧会话请求同样静默。
+  })
+}
+
 const service: AxiosInstance = axios.create({
   baseURL: urlConfig.baseUrl,
   timeout: 120000,
@@ -29,12 +78,11 @@ const service: AxiosInstance = axios.create({
 
 service.interceptors.request.use(
   (config) => {
-    const skipToken = config.headers?.isToken === false
-    if (config.headers) delete config.headers.isToken
+    const skipToken = config.headers.get('isToken') === false
+    config.headers.delete('isToken')
     const token = getToken()
-    if (!skipToken && token && config.headers) {
-      config.headers.Authorization = 'Bearer ' + token
-    }
+    config.sessionVersion = getSessionVersion()
+    if (!skipToken && token) config.headers.set('Authorization', 'Bearer ' + token)
     return config
   },
   (error) => Promise.reject(error),
@@ -43,47 +91,42 @@ service.interceptors.request.use(
 service.interceptors.response.use(
   (res) => {
     // 二进制直接返回
-    if (res.request?.responseType === 'blob' || res.request?.responseType === 'arraybuffer') {
-      return res.data
-    }
+    if (res.config.responseType === 'blob' || res.config.responseType === 'arraybuffer') return res.data
+    const error = businessError(res.data)
+    if (error) throw expireIfUnauthorized(error, res.config)
     return res.data
   },
   (error) => {
-    const status = error?.response?.status
-    const body = error?.response?.data
-    const msg =
-      body?.msg ||
-      body?.message ||
-      (status ? `请求失败（HTTP ${status}）` : error?.message || '网络异常，请检查后端服务是否已启动')
-    if (!error?.config?.silent) {
-      ElMessage.error(msg)
+    if (error instanceof AppRequestError) return Promise.reject(error)
+    if (isRequestCanceled(error)) {
+      return Promise.reject(new AppRequestError('请求已取消', { kind: 'cancel', silent: true, originalError: error }))
     }
-    if (status === 401 && !String(error?.config?.url || '').startsWith('/auth/')) {
-      removeToken()
-      if (!window.location.hash.startsWith('#/login')) {
-        const redirect = window.location.hash.slice(1) || '/manage'
-        window.location.hash = '#/login?redirect=' + encodeURIComponent(redirect)
-      }
-    }
-    return Promise.reject(new Error(msg))
+    const status = axios.isAxiosError(error) ? error.response?.status : undefined
+    const body = axios.isAxiosError(error) ? error.response?.data : undefined
+    const config = axios.isAxiosError(error) ? error.config : undefined
+    const timeout = axios.isAxiosError(error) && (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT')
+    const message = bodyMessage(body) || (status ? `请求失败（HTTP ${status}）`
+      : timeout ? '请求超时，请稍后重试' : '网络异常，请检查网络和后端服务')
+    return Promise.reject(expireIfUnauthorized(new AppRequestError(message, {
+      kind: status ? 'http' : 'network', status,
+      code: axios.isAxiosError(error) ? error.code : undefined,
+      originalError: error,
+    }), config))
   },
 )
 
 /** 解包：有外壳取 result，裸返回原样返回 */
 export async function unwrap<T = any>(p: Promise<any>): Promise<T> {
   const r = await p
+  const error = businessError(r)
+  if (error) throw error
   if (isEnvelope(r)) {
-    if (r.code !== 200) {
-      const err = new Error(r.msg || '操作失败') as Error & { code?: number }
-      err.code = r.code
-      throw err
-    }
     return (r.result ?? null) as T
   }
   return r as T
 }
 
-/** 对象转 x-www-form-urlencoded */
+/** 对象转 multipart/form-data */
 function toFormData(data: Record<string, any>): FormData {
   const fd = new FormData()
   Object.entries(data || {}).forEach(([k, v]) => {
@@ -100,7 +143,7 @@ function toFormData(data: Record<string, any>): FormData {
 }
 
 export interface ReqOptions extends AxiosRequestConfig {
-  /** 静默：不弹出错误提示 */
+  /** 兼容旧调用；页面决定是否提示，请求层不会重复弹窗。 */
   silent?: boolean
 }
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { showError } from '@/utils/feedback'
 /**
  * 地图管理（#/maps）—— 覆盖 MapController + MapRelationController 的地图编排链路
  *
@@ -20,7 +21,7 @@ import Icon from '@/components/common/Icon.vue'
 import { dataTypeApi, layerContentApi, mapApi, mapRelationApi } from '@/api'
 import { fmtTime, pickList } from '@/utils/format'
 import { isRasterDataType, layerDataTypeName } from '@/utils/datasets'
-import { useUserStore } from '@/stores/user'
+import { useUserStore } from '@/auth/store'
 
 const userStore = useUserStore()
 const USER = userStore.userName || 'admin'
@@ -50,7 +51,7 @@ async function loadList(silent = false) {
   try {
     rows.value = pickList<any>(await mapApi.getAllList())
   } catch (e: any) {
-    if (!silent) ElMessage.error(e?.message || '地图列表加载失败')
+    if (!silent) showError(e, '地图列表加载失败')
   } finally {
     if (!silent) loading.value = false
     scheduleTilePoll()
@@ -192,7 +193,7 @@ async function openEdit(row: any) {
     }
     if (!catalogOptions.value.length) loadCatalogs()
   } catch (e: any) {
-    ElMessage.error(e?.message || '地图详情加载失败')
+    showError(e, '地图详情加载失败')
   } finally {
     edit.saving = false
   }
@@ -255,7 +256,7 @@ async function saveEdit() {
     edit.visible = false
     await loadList()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     edit.saving = false
   }
@@ -278,7 +279,7 @@ async function publishMap(row: any) {
     await loadList(true)
     await queryTile(row)
   } catch (e: any) {
-    ElMessage.error(e?.message || '发布失败（请确认已关联图层且 GeoServer 可用）')
+    showError(e, '发布失败（请确认已关联图层且 GeoServer 可用）')
   }
 }
 
@@ -297,7 +298,7 @@ async function refreshCache(row: any) {
     ElMessage.success('缓存刷新任务已下发')
     await queryTile(row)
   } catch (e: any) {
-    ElMessage.error(e?.message || '刷新失败')
+    showError(e, '刷新失败')
   }
 }
 
@@ -316,7 +317,7 @@ async function removeMap(row: any) {
     ElMessage.success('已删除')
     await loadList()
   } catch (e: any) {
-    ElMessage.error(e?.message || '删除失败')
+    showError(e, '删除失败')
   }
 }
 
@@ -347,7 +348,7 @@ async function loadRelations() {
     drawer.dirty = false
   } catch (e: any) {
     drawer.list = []
-    ElMessage.error(e?.message || '图层关联加载失败')
+    showError(e, '图层关联加载失败')
   } finally {
     drawer.loading = false
   }
@@ -387,7 +388,7 @@ async function saveRelations() {
     ElMessage.success('已保存排序 / 比例尺')
     await loadRelations()
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败')
+    showError(e, '保存失败')
   } finally {
     drawer.saving = false
   }
@@ -399,7 +400,7 @@ async function recalcBBox() {
     ElMessage.success('已按关联图层重算地图范围')
     await loadList(true)
   } catch (e: any) {
-    ElMessage.error(e?.message || '重算范围失败')
+    showError(e, '重算范围失败')
   }
 }
 
@@ -425,7 +426,7 @@ async function openPicker() {
     picker.list = pickList<any>(await layerContentApi.getPageListByName({ createBy: USER }, 50, 1))
   } catch (e: any) {
     picker.list = []
-    ElMessage.error(e?.message || '图层列表加载失败')
+    showError(e, '图层列表加载失败')
   } finally {
     picker.loading = false
   }
@@ -445,7 +446,7 @@ async function confirmPicker() {
     picker.visible = false
     await loadRelations()
   } catch (e: any) {
-    ElMessage.error(e?.message || '关联失败')
+    showError(e, '关联失败')
   } finally {
     drawer.saving = false
   }
